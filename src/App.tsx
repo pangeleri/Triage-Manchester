@@ -22,9 +22,33 @@ import 'jspdf-autotable';
 import { format, differenceInMinutes, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from './lib/utils';
-import { FINDINGS, TriageLevel, PatientData, VitalSigns } from './types';
+import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle } from './types';
 
 // --- Constants & Helpers ---
+
+const GCS_OPTIONS = {
+  eye: [
+    { value: 4, label: 'Espontánea' },
+    { value: 3, label: 'Al estímulo verbal' },
+    { value: 2, label: 'Al dolor' },
+    { value: 1, label: 'Sin respuesta' },
+  ],
+  verbal: [
+    { value: 5, label: 'Orientado' },
+    { value: 4, label: 'Confuso' },
+    { value: 3, label: 'Palabras inapropiadas' },
+    { value: 2, label: 'Sonidos incomprensibles' },
+    { value: 1, label: 'Sin respuesta' },
+  ],
+  motor: [
+    { value: 6, label: 'Obedece órdenes' },
+    { value: 5, label: 'Localiza el dolor' },
+    { value: 4, label: 'Retirada al dolor' },
+    { value: 3, label: 'Flexión anormal (decorticación)' },
+    { value: 2, label: 'Extensión anormal (descerebración)' },
+    { value: 1, label: 'Sin respuesta' },
+  ],
+};
 
 const INITIAL_VITALS: VitalSigns = {
   heartRate: undefined,
@@ -34,6 +58,34 @@ const INITIAL_VITALS: VitalSigns = {
   oxygenSaturation: undefined,
   temperature: undefined,
   glasgow: undefined,
+  glucose: undefined,
+};
+
+const INITIAL_TEP: PediatricTriangle = {
+  appearance: {
+    normal: false,
+    abnormalActivity: false,
+    unresponsive: false,
+    abnormalVisualContact: false,
+    irritableInconsolable: false,
+    abnormalCry: false,
+    abnormalTone: false,
+  },
+  respiration: {
+    normal: false,
+    agitation: false,
+    apnea: false,
+    abnormalPosition: false,
+    abnormalSounds: false,
+    retractions: false,
+  },
+  circulation: {
+    normal: false,
+    cyanosis: false,
+    mottled: false,
+    pallor: false,
+    flushing: false,
+  },
 };
 
 const INITIAL_PATIENT: Partial<PatientData> = {
@@ -42,14 +94,34 @@ const INITIAL_PATIENT: Partial<PatientData> = {
   ageUnit: 'años',
   gender: 'M',
   documentId: '',
-  abcCheck: {
-    airway: true,
-    breathing: true,
-    circulation: true,
-  },
+  type: 'adult',
+  tep: INITIAL_TEP,
   vitals: INITIAL_VITALS,
   findings: [],
   otherSymptoms: '',
+};
+
+// Simplified Physiological Constants for Pediatric (Based on screenshots)
+// Range logic: normal, +/- 1DS, +/- 2DS
+const getVitalsRange = (ageMonths: number, type: 'FR' | 'FC') => {
+  // Simplified ranges based on provided table
+  if (type === 'FR') {
+    if (ageMonths <= 3) return { normal: [30, 60], d1: [60, 70], d2: [70, 80] };
+    if (ageMonths <= 6) return { normal: [30, 60], d1: [60, 70], d2: [70, 80] };
+    if (ageMonths <= 12) return { normal: [25, 45], d1: [45, 55], d2: [55, 60] };
+    if (ageMonths <= 36) return { normal: [20, 30], d1: [30, 35], d2: [35, 40] };
+    if (ageMonths <= 72) return { normal: [16, 24], d1: [24, 28], d2: [28, 32] };
+    if (ageMonths <= 120) return { normal: [14, 20], d1: [20, 24], d2: [24, 26] };
+    return { normal: [14, 20], d1: [20, 24], d2: [24, 26] };
+  } else {
+    if (ageMonths <= 3) return { normal: [90, 180], d1: [180, 205], d2: [205, 230] };
+    if (ageMonths <= 6) return { normal: [80, 160], d1: [160, 180], d2: [180, 210] };
+    if (ageMonths <= 12) return { normal: [80, 140], d1: [140, 160], d2: [160, 180] };
+    if (ageMonths <= 36) return { normal: [75, 130], d1: [130, 145], d2: [145, 165] };
+    if (ageMonths <= 72) return { normal: [70, 110], d1: [110, 125], d2: [125, 140] };
+    if (ageMonths <= 120) return { normal: [60, 90], d1: [90, 105], d2: [105, 120] };
+    return { normal: [60, 90], d1: [90, 105], d2: [105, 120] };
+  }
 };
 
 // --- Main Component ---
@@ -59,6 +131,10 @@ export default function App() {
   const [patient, setPatient] = useState<Partial<PatientData>>(INITIAL_PATIENT);
   const [history, setHistory] = useState<PatientData[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
+  
+  const [showGlasgowCalc, setShowGlasgowCalc] = useState(false);
+  const [gcsComponents, setGcsComponents] = useState({ eye: 4, verbal: 5, motor: 6 });
+  const [gcsTouched, setGcsTouched] = useState({ eye: false, verbal: false, motor: false });
 
   // Update current time for timers
   useEffect(() => {
@@ -69,97 +145,190 @@ export default function App() {
   // --- Logic Functions ---
 
   const calculateTriage = (data: Partial<PatientData>): { level: TriageLevel; priority: string; wait: string; destination: string } => {
-    // Step 1: ABC Check
-    if (!data.abcCheck?.airway || !data.abcCheck?.breathing || !data.abcCheck?.circulation) {
-      return { 
-        level: 'ROJO', 
-        priority: 'Prioridad I (Emergencia)', 
-        wait: 'Inmediata (0 min)', 
-        destination: 'Sala de Reanimación' 
-      };
-    }
-
     const v = data.vitals || INITIAL_VITALS;
-    const age = data.age || 0;
-    const isInfant = data.ageUnit === 'meses' && age <= 12;
-    const isPreSchool = data.ageUnit === 'años' && age <= 5;
-
-    // Step 2: Vital Signs Ranges
-    let autoRed = false;
+    const ageMonths = (data.age || 0) * (data.ageUnit === 'años' ? 12 : 1);
     
-    // Helper to check if value exists and is in range
-    const check = (val: number | undefined, min?: number, max?: number) => {
-      if (val === undefined) return false;
-      if (min !== undefined && val < min) return true;
-      if (max !== undefined && val > max) return true;
-      return false;
+    // Evaluate potential acuity levels (1 to 5) and choose the most acute one (lowest index, i.e., I).
+    let suggestedLevelValue = 5;
+
+    // --- 1. TEP (Triángulo de Evaluación Pediátrica) Modifier ---
+    if (data.type === 'pediatric' && data.tep) {
+      const { appearance, respiration, circulation } = data.tep;
+      const appValues = Object.values(appearance);
+      const respValues = Object.values(respiration);
+      const circValues = Object.values(circulation);
+      
+      const appAltered = appValues.filter(v => v).length;
+      const respAltered = respValues.filter(v => v).length;
+      const circAltered = circValues.filter(v => v).length;
+      
+      if (appearance.unresponsive || (appAltered && respAltered && circAltered)) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if ((appAltered && respAltered) || (appAltered && circAltered) || (respAltered && circAltered)) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (appAltered || respAltered || circAltered) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    }
+
+    // --- 2. Glasgow Coma Scale (GCS) Modifier ---
+    if (v.glasgow !== undefined) {
+      if (v.glasgow <= 9) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.glasgow >= 10 && v.glasgow <= 13) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.glasgow === 14) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    }
+
+    // --- 3. Oxygen Saturation Modifier ---
+    if (v.oxygenSaturation !== undefined) {
+      if (v.oxygenSaturation < 90) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.oxygenSaturation >= 90 && v.oxygenSaturation <= 92) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.oxygenSaturation >= 93 && v.oxygenSaturation <= 94) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    }
+
+    // --- 4. Hemodynamics & Vital Signs Modifiers by age ---
+    if (data.type === 'pediatric') {
+      const frRange = getVitalsRange(ageMonths, 'FR');
+      const fcRange = getVitalsRange(ageMonths, 'FC');
+
+      // Respiratory Rate (Pediatric)
+      if (v.respiratoryRate !== undefined) {
+        if (v.respiratoryRate > frRange.d2[1] * 1.2 || v.respiratoryRate < frRange.normal[0] * 0.4) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.respiratoryRate > frRange.d2[1] || v.respiratoryRate < frRange.normal[0] * 0.6) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.respiratoryRate > frRange.d1[1] || v.respiratoryRate < frRange.normal[0]) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+
+      // Heart Rate (Pediatric)
+      if (v.heartRate !== undefined) {
+        if (v.heartRate > fcRange.d2[1] * 1.3 || v.heartRate < fcRange.normal[0] * 0.4) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.heartRate > fcRange.d2[1] || v.heartRate < fcRange.normal[0] * 0.6) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.heartRate > fcRange.d1[1] || v.heartRate < fcRange.normal[0]) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+    } else {
+      // Adult Vital Signs
+      if (v.respiratoryRate !== undefined) {
+        if (v.respiratoryRate >= 35 || v.respiratoryRate < 8) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.respiratoryRate >= 30 || v.respiratoryRate < 10) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.respiratoryRate >= 24) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+
+      if (v.heartRate !== undefined) {
+        if (v.heartRate >= 140 || v.heartRate < 40) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.heartRate >= 120 || v.heartRate < 50) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.heartRate >= 100 || v.heartRate < 60) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+
+      if (v.systolicBP !== undefined) {
+        if (v.systolicBP < 80) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.systolicBP < 90 || v.systolicBP > 220) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.systolicBP > 200) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+      if (v.diastolicBP !== undefined) {
+        if (v.diastolicBP > 130) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.diastolicBP > 110) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        }
+      }
+    }
+
+    // --- 5. Temperature Modifiers (Both adult & pediatric) ---
+    if (v.temperature !== undefined) {
+      if (v.temperature < 32 || v.temperature >= 41) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.temperature < 35 || v.temperature >= 38.5) {
+        const isFeverWithSirs = v.temperature >= 38.5 && (
+          (v.heartRate && v.heartRate > 100) || 
+          (v.respiratoryRate && v.respiratoryRate > 22)
+        );
+        if (isFeverWithSirs) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+    }
+
+    // --- 6. Glucose Modifier ---
+    if (v.glucose !== undefined) {
+      if (v.glucose < 40 || v.glucose > 500) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.glucose < 65 || v.glucose > 250) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    }
+
+    // --- 7. Clinical Findings / Discriminators Modifiers ---
+    if (data.findings?.some(f => FINDINGS.LEVEL_I.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+    }
+    if (data.findings?.some(f => FINDINGS.LEVEL_II.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+    }
+    if (data.findings?.some(f => FINDINGS.LEVEL_III.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+    }
+    if (data.findings?.some(f => FINDINGS.LEVEL_IV.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 4);
+    }
+    if (data.findings?.some(f => FINDINGS.LEVEL_V.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 5);
+    }
+
+    // Map level number to Roman numeral and label
+    const levelMap: Record<number, { level: TriageLevel; priority: string; wait: string; destination: string }> = {
+      1: { level: 'I', priority: 'Nivel I - Resucitación', wait: 'Inmediata (0 min)', destination: 'Shock Room' },
+      2: { level: 'II', priority: 'Nivel II - Emergencia', wait: '≤ 15 min', destination: 'Box de Emergencias' },
+      3: { level: 'III', priority: 'Nivel III - Urgente', wait: '≤ 30 min', destination: 'Consultorio de Urgencias' },
+      4: { level: 'IV', priority: 'Nivel IV - Menos Urgente', wait: '≤ 60 min', destination: 'Consultorio General' },
+      5: { level: 'V', priority: 'Nivel V - No Urgente', wait: '≤ 120 min', destination: 'Consulta Externa / Admisión' },
     };
 
-    if (!isInfant && !isPreSchool) { // Adult
-      if (check(v.respiratoryRate, 10, 35)) autoRed = true;
-      if (check(v.heartRate, 50, 150)) autoRed = true;
-      if (check(v.systolicBP, 90, 220)) autoRed = true;
-      if (v.diastolicBP !== undefined && v.diastolicBP > 110) autoRed = true;
-    } else if (isInfant) {
-      if (check(v.heartRate, 61, 199)) autoRed = true; // FC <=60 or >=200
-      if (age <= 2 && v.respiratoryRate !== undefined && v.respiratoryRate >= 60) autoRed = true;
-      if (age > 2 && v.respiratoryRate !== undefined && v.respiratoryRate >= 50) autoRed = true;
-      if (v.oxygenSaturation !== undefined && v.oxygenSaturation <= 85) autoRed = true;
-    } else if (isPreSchool) {
-      if (check(v.heartRate, 61, 179)) autoRed = true; // FC <=60 or >=180
-      if (v.systolicBP !== undefined && v.systolicBP < 80) autoRed = true;
-      if (v.respiratoryRate !== undefined && v.respiratoryRate > 40 && v.temperature !== undefined && v.temperature < 38) autoRed = true; 
-      if (v.oxygenSaturation !== undefined && v.oxygenSaturation <= 85) autoRed = true;
-    }
-
-    if (autoRed || (v.glasgow !== undefined && v.glasgow < 9)) {
-      return { 
-        level: 'ROJO', 
-        priority: 'Prioridad II (Muy Urgente)', 
-        wait: '0-10 min', 
-        destination: 'Sala de Observación Crítica' 
-      };
-    }
-
-    // Step 3: Clinical Findings (Checkboxes)
-    const selectedFindings = data.findings || [];
-    
-    const hasRojo = selectedFindings.some(f => FINDINGS.ROJO.includes(f));
-    if (hasRojo) {
-      return { 
-        level: 'ROJO', 
-        priority: 'Prioridad II (Muy Urgente)', 
-        wait: '0-10 min', 
-        destination: 'Sala de Emergencias' 
-      };
-    }
-
-    const hasAmarillo = selectedFindings.some(f => FINDINGS.AMARILLO.includes(f));
-    if (hasAmarillo) {
-      return { 
-        level: 'AMARILLO', 
-        priority: 'Prioridad III (Urgente)', 
-        wait: 'Máximo 60 min', 
-        destination: 'Consultorio de Urgencias' 
-      };
-    }
-
-    // Default to Green
-    return { 
-      level: 'VERDE', 
-      priority: 'Prioridad IV/V (Estándar/No Urgente)', 
-      wait: '120 min o Derivación', 
-      destination: 'Consulta Externa / Sala de Espera' 
-    };
+    return levelMap[suggestedLevelValue] || levelMap[5];
   };
 
   const currentTriage = useMemo(() => calculateTriage(patient), [patient]);
 
   const isStepValid = () => {
     if (step === 1) {
-      return patient.name && patient.age !== undefined && patient.documentId;
+      return patient.name && patient.age !== undefined && patient.documentId && patient.type;
     }
-    if (step === 2) {
+    if (step === 2 && patient.type === 'pediatric') {
+       const tep = patient.tep;
+       if (!tep) return false;
+       const hasAppearance = Object.values(tep.appearance).some(v => v);
+       const hasRespiration = Object.values(tep.respiration).some(v => v);
+       const hasCirculation = Object.values(tep.circulation).some(v => v);
+       return !!(hasAppearance && hasRespiration && hasCirculation);
+    }
+    if (step === 3) {
       const v = patient.vitals;
       return v?.heartRate !== undefined && 
              v?.respiratoryRate !== undefined && 
@@ -169,7 +338,7 @@ export default function App() {
              v?.temperature !== undefined && 
              v?.glasgow !== undefined;
     }
-    if (step === 3) {
+    if (step === 4) {
       return (patient.findings && patient.findings.length > 0) || patient.otherSymptoms;
     }
     return true;
@@ -177,10 +346,21 @@ export default function App() {
 
   const handleNext = () => {
     if (isStepValid()) {
-      setStep(s => s + 1);
+      if (step === 1 && patient.type === 'adult') {
+        setStep(3); // Skip TEP for adults
+      } else {
+        setStep(s => s + 1);
+      }
     }
   };
-  const handleBack = () => setStep(s => s - 1);
+
+  const handleBack = () => {
+    if (step === 3 && patient.type === 'adult') {
+      setStep(1);
+    } else {
+      setStep(s => s - 1);
+    }
+  };
 
   const finalizeTriage = () => {
     const finalPatient: PatientData = {
@@ -204,7 +384,7 @@ export default function App() {
     doc.setFontSize(18);
     doc.text('HOSPITAL GRAL. DE AGUDOS "DRA. CECILIA GRIERSON"', 105, 20, { align: 'center' });
     doc.setFontSize(14);
-    doc.text('FORMULARIO HCU-F053: REGISTRO DE TRIAJE MANCHESTER', 105, 30, { align: 'center' });
+    doc.text('FORMULARIO HCU-F053: REGISTRO DE TRIAJE CTAS / CANADIENSE', 105, 30, { align: 'center' });
     
     // Patient Info
     doc.setFontSize(12);
@@ -216,12 +396,18 @@ export default function App() {
     doc.text(`Fecha/Hora: ${format(new Date(p.arrivalDate), 'dd/MM/yyyy HH:mm')}`, 20, 75);
 
     // Triage Result
-    doc.setFillColor(p.triageLevel === 'ROJO' ? 220 : p.triageLevel === 'AMARILLO' ? 255 : 34, 
-                     p.triageLevel === 'ROJO' ? 38 : p.triageLevel === 'AMARILLO' ? 200 : 197, 
-                     p.triageLevel === 'ROJO' ? 38 : p.triageLevel === 'AMARILLO' ? 0 : 94);
+    const levelColors: Record<string, [number, number, number]> = {
+      'I': [220, 38, 38],
+      'II': [249, 115, 22],
+      'III': [234, 179, 8],
+      'IV': [34, 197, 94],
+      'V': [59, 130, 246]
+    };
+    const [r, g, b] = levelColors[p.triageLevel] || [100, 100, 100];
+    doc.setFillColor(r, g, b);
     doc.rect(20, 85, 170, 15, 'F');
-    doc.setTextColor(p.triageLevel === 'AMARILLO' ? 0 : 255);
-    doc.text(`CLASIFICACIÓN: ${p.triageLevel} - ${p.originalPriority}`, 105, 95, { align: 'center' });
+    doc.setTextColor(p.triageLevel === 'III' ? 0 : 255);
+    doc.text(`CLASIFICACIÓN: NIVEL ${p.triageLevel} - ${p.originalPriority}`, 105, 95, { align: 'center' });
     doc.setTextColor(0);
 
     // Vitals Table
@@ -229,11 +415,13 @@ export default function App() {
       startY: 110,
       head: [['Signo Vital', 'Valor']],
       body: [
+        ['Tipo de Paciente', p.type.toUpperCase()],
         ['Frecuencia Cardíaca', `${p.vitals.heartRate ?? 'N/A'} lpm`],
         ['Frecuencia Respiratoria', `${p.vitals.respiratoryRate ?? 'N/A'} rpm`],
         ['Presión Arterial', `${p.vitals.systolicBP ?? 'N/A'}/${p.vitals.diastolicBP ?? 'N/A'} mmHg`],
         ['Saturación O2', `${p.vitals.oxygenSaturation ?? 'N/A'}%`],
         ['Temperatura', `${p.vitals.temperature ?? 'N/A'}°C`],
+        ['Glucosa', `${p.vitals.glucose ?? 'N/A'} mg/dl`],
         ['Escala de Glasgow', `${p.vitals.glasgow ?? 'N/A'}/15`],
       ],
     });
@@ -257,11 +445,18 @@ export default function App() {
       destination: p.suggestedDestination,
     } : currentTriage;
 
+    const tepDetails = p.type === 'pediatric' && p.tep ? `
+TEP (Triángulo Evaluación Pediátrico):
+- Apariencia: ${Object.entries(p.tep.appearance).filter(([_, v]) => v).map(([k]) => k).join(', ') || 'Normal'}
+- Respiración: ${Object.entries(p.tep.respiration).filter(([_, v]) => v).map(([k]) => k).join(', ') || 'Normal'}
+- Circulación: ${Object.entries(p.tep.circulation).filter(([_, v]) => v).map(([k]) => k).join(', ') || 'Normal'}` : '';
+
     return `
-PRIORIDAD: ${triage.level} (${triage.priority})
+TIPO DE PACIENTE: ${p.type === 'pediatric' ? 'PEDIÁTRICO' : 'ADULTO'}
+NIVEL DE GRAVEDAD: ${triage.level} (${triage.priority})
 DOCUMENTO: ${p.documentId || '---'}
-SIGNOS VITALES: FC: ${p.vitals?.heartRate ?? '---'} lpm, FR: ${p.vitals?.respiratoryRate ?? '---'} rpm, PA: ${p.vitals?.systolicBP ?? '---'}/${p.vitals?.diastolicBP ?? '---'} mmHg, SatO2: ${p.vitals?.oxygenSaturation ?? '---'}%, T°: ${p.vitals?.temperature ?? '---'}°C
-HALLAZGO PRINCIPAL: ${p.findings?.join(', ') || 'Ninguno'}${p.otherSymptoms ? ` (${p.otherSymptoms})` : ''}
+SIGNOS VITALES: FC: ${p.vitals?.heartRate ?? '---'} lpm, FR: ${p.vitals?.respiratoryRate ?? '---'} rpm, PA: ${p.vitals?.systolicBP ?? '---'}/${p.vitals?.diastolicBP ?? '---'} mmHg, SpO2: ${p.vitals?.oxygenSaturation ?? '---'}%, T°: ${p.vitals?.temperature ?? '---'}°C, GLUCOSA: ${p.vitals?.glucose ?? '---'} mg/dl${tepDetails}
+PROBLEMA PRINCIPAL: ${p.findings?.join(', ') || 'Sin hallazgos específicos'}${p.otherSymptoms ? ` (${p.otherSymptoms})` : ''}
 ESCALA DE GLASGOW: ${p.vitals?.glasgow ?? '---'}/15
 DESTINO SUGERIDO: ${triage.destination}
     `.trim();
@@ -269,22 +464,35 @@ DESTINO SUGERIDO: ${triage.destination}
 
   // --- Render Helpers ---
 
-  const renderStepIndicator = () => (
-    <div className="flex items-center justify-center space-x-4 mb-8">
-      {[1, 2, 3, 4].map((i) => (
-        <div key={i} className="flex items-center">
-          <div className={cn(
-            "w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all",
-            step === i ? "bg-blue-600 text-white scale-110 shadow-lg" : 
-            step > i ? "bg-green-500 text-white" : "bg-slate-200 text-slate-500"
-          )}>
-            {step > i ? <CheckCircle2 size={20} /> : i}
-          </div>
-          {i < 4 && <div className={cn("w-8 h-1 mx-2 rounded", step > i ? "bg-green-500" : "bg-slate-200")} />}
-        </div>
-      ))}
-    </div>
-  );
+  const renderStepIndicator = () => {
+    const totalSteps = 5;
+    return (
+      <div className="flex items-center justify-center space-x-4 mb-8">
+        {[1, 2, 3, 4, 5].map((i) => {
+          if (i === 2 && patient.type === 'adult') return null; // Hide TEP step for adults
+          const isGoable = i < step;
+          return (
+            <div key={i} className="flex items-center">
+              <button
+                type="button"
+                disabled={!isGoable}
+                onClick={() => isGoable && setStep(i)}
+                className={cn(
+                  "w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2",
+                  step === i ? "bg-blue-600 text-white scale-110 shadow-lg" : 
+                  step > i ? "bg-green-500 text-white hover:bg-green-600 cursor-pointer" : "bg-slate-200 text-slate-500 cursor-not-allowed"
+                )}
+                title={isGoable ? `Volver al Paso ${i}` : `Paso ${i}`}
+              >
+                {step > i ? <CheckCircle2 size={20} /> : i}
+              </button>
+              {i < totalSteps && <div className={cn("w-8 h-1 mx-2 rounded", step > i ? "bg-green-500" : "bg-slate-200")} />}
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   return (
     <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
@@ -295,7 +503,7 @@ DESTINO SUGERIDO: ${triage.destination}
             <Activity size={32} />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Manchester Triage System</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Herramienta para el triaje Grierson</h1>
             <p className="text-slate-500 font-medium">Hospital Gral. de Agudos "Dra. Cecilia Grierson"</p>
           </div>
         </div>
@@ -310,7 +518,7 @@ DESTINO SUGERIDO: ${triage.destination}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Form Area */}
         <main className="lg:col-span-2">
-          <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 overflow-hidden">
+          <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100">
             {renderStepIndicator()}
 
             <div className="p-8 pt-0">
@@ -325,8 +533,36 @@ DESTINO SUGERIDO: ${triage.destination}
                   >
                     <div className="flex items-center gap-2 text-blue-600 mb-4">
                       <User size={24} />
-                      <h2 className="text-xl font-bold">Datos del Paciente <span className="text-red-500">*</span></h2>
+                      <h2 className="text-xl font-bold">Identificación del Paciente <span className="text-red-500">*</span></h2>
                     </div>
+
+                    <div className="grid grid-cols-1 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-sm font-semibold text-slate-700">Tipo de Paciente <span className="text-red-500">*</span></label>
+                        <div className="flex gap-4">
+                          {[
+                            { value: 'adult', label: 'Adulto', icon: <User size={18} /> },
+                            { value: 'pediatric', label: 'Pediátrico', icon: <User size={18} /> }
+                          ].map(t => (
+                            <button
+                              key={t.value}
+                              type="button"
+                              onClick={() => setPatient({...patient, type: t.value as any})}
+                              className={cn(
+                                "flex-1 py-4 rounded-xl border font-bold transition-all flex flex-col items-center gap-2 cursor-pointer",
+                                patient.type === t.value 
+                                  ? "bg-blue-600 border-blue-600 text-white shadow-md opacity-100" 
+                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 opacity-80"
+                              )}
+                            >
+                              {t.icon}
+                              {t.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-2">
                         <label className="text-sm font-semibold text-slate-700">Nombre Completo <span className="text-red-500">*</span></label>
@@ -338,6 +574,19 @@ DESTINO SUGERIDO: ${triage.destination}
                           onChange={e => setPatient({...patient, name: e.target.value})}
                         />
                       </div>
+                      <div className="space-y-2">
+                        <label className="text-sm font-semibold text-slate-700">Documento (DNI/CI) <span className="text-red-500">*</span></label>
+                        <input 
+                          type="text" 
+                          className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                          placeholder="Ej. 12345678"
+                          value={patient.documentId}
+                          onChange={e => {
+                            const val = e.target.value.replace(/\D/g, '');
+                            setPatient({...patient, documentId: val});
+                          }}
+                        />
+                      </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
                           <label className="text-sm font-semibold text-slate-700">Edad <span className="text-red-500">*</span></label>
@@ -346,7 +595,18 @@ DESTINO SUGERIDO: ${triage.destination}
                             className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                             placeholder="---"
                             value={patient.age ?? ''}
-                            onChange={e => setPatient({...patient, age: e.target.value ? parseInt(e.target.value) : undefined})}
+                            onChange={e => {
+                              const val = e.target.value ? parseInt(e.target.value) : undefined;
+                              let newType = patient.type;
+                              if (val !== undefined) {
+                                if (patient.ageUnit === 'años') {
+                                  newType = val >= 18 ? 'adult' : 'pediatric';
+                                } else {
+                                  newType = 'pediatric';
+                                }
+                              }
+                              setPatient({...patient, age: val, type: newType as any});
+                            }}
                           />
                         </div>
                         <div className="space-y-2">
@@ -354,13 +614,27 @@ DESTINO SUGERIDO: ${triage.destination}
                           <select 
                             className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
                             value={patient.ageUnit}
-                            onChange={e => setPatient({...patient, ageUnit: e.target.value as any})}
+                            onChange={e => {
+                              const unit = e.target.value as any;
+                              let newType = patient.type;
+                              if (patient.age !== undefined) {
+                                if (unit === 'años') {
+                                  newType = patient.age >= 18 ? 'adult' : 'pediatric';
+                                } else {
+                                  newType = 'pediatric';
+                                }
+                              }
+                              setPatient({...patient, ageUnit: unit, type: newType});
+                            }}
                           >
                             <option value="años">Años</option>
                             <option value="meses">Meses</option>
                           </select>
                         </div>
                       </div>
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        * El tipo de paciente se selecciona automáticamente según la edad (18+ años = Adulto).
+                      </p>
                       <div className="space-y-2">
                         <label className="text-sm font-semibold text-slate-700">Género</label>
                         <div className="flex gap-4">
@@ -378,52 +652,11 @@ DESTINO SUGERIDO: ${triage.destination}
                           ))}
                         </div>
                       </div>
-                      <div className="space-y-2">
-                        <label className="text-sm font-semibold text-slate-700">Documento (DNI/CI) <span className="text-red-500">*</span></label>
-                        <input 
-                          type="text" 
-                          className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                          placeholder="Ej. 12345678"
-                          value={patient.documentId}
-                          onChange={e => setPatient({...patient, documentId: e.target.value})}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="pt-6 border-t border-slate-100">
-                      <div className="flex items-center gap-2 text-red-600 mb-4">
-                        <AlertCircle size={24} />
-                        <h2 className="text-xl font-bold">Evaluación Inicial ABC</h2>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        {[
-                          { key: 'airway', label: 'Vía Aérea Permeable?' },
-                          { key: 'breathing', label: 'Ventilación Adecuada?' },
-                          { key: 'circulation', label: 'Circulación Estable?' },
-                        ].map(check => (
-                          <button
-                            key={check.key}
-                            onClick={() => setPatient({
-                              ...patient, 
-                              abcCheck: { ...patient.abcCheck!, [check.key]: !patient.abcCheck![check.key as keyof typeof patient.abcCheck] }
-                            })}
-                            className={cn(
-                              "p-4 rounded-2xl border flex flex-col items-center gap-2 transition-all",
-                              patient.abcCheck![check.key as keyof typeof patient.abcCheck] 
-                                ? "bg-green-50 border-green-200 text-green-700" 
-                                : "bg-red-50 border-red-200 text-red-700 shadow-inner"
-                            )}
-                          >
-                            <span className="text-xs font-bold uppercase tracking-wider">{check.label}</span>
-                            <span className="text-lg font-black">{patient.abcCheck![check.key as keyof typeof patient.abcCheck] ? 'SÍ' : 'NO'}</span>
-                          </button>
-                        ))}
-                      </div>
                     </div>
                   </motion.div>
                 )}
 
-                {step === 2 && (
+                {step === 2 && patient.type === 'pediatric' && (
                   <motion.div
                     key="step2"
                     initial={{ opacity: 0, x: 20 }}
@@ -431,40 +664,107 @@ DESTINO SUGERIDO: ${triage.destination}
                     exit={{ opacity: 0, x: -20 }}
                     className="space-y-6"
                   >
-                    <div className="flex items-center gap-2 text-blue-600 mb-4">
-                      <Heart size={24} />
-                      <h2 className="text-xl font-bold">Signos Vitales <span className="text-red-500">*</span></h2>
+                    <div className="flex items-center justify-between gap-2 mb-4">
+                      <div className="flex items-center gap-2 text-blue-600">
+                        <Stethoscope size={24} />
+                        <h2 className="text-xl font-bold">Triángulo de Evaluación Pediátrico (TEP)</h2>
+                      </div>
+                      <span className="text-[10px] bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-bold">
+                        Obligatorio para pediatría
+                      </span>
                     </div>
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
+
+                    <p className="text-sm text-slate-500">
+                      Por favor, evalúe las 3 componentes del triángulo. Seleccione si está <b>estable</b> o marque los síntomas <b>anormales</b> correspondientes:
+                    </p>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       {[
-                        { key: 'heartRate', label: 'FC (lpm)', icon: <Activity size={16} /> },
-                        { key: 'respiratoryRate', label: 'FR (rpm)', icon: <Timer size={16} /> },
-                        { key: 'systolicBP', label: 'PAS (mmHg)', icon: <Activity size={16} /> },
-                        { key: 'diastolicBP', label: 'PAD (mmHg)', icon: <Activity size={16} /> },
-                        { key: 'oxygenSaturation', label: 'SatO2 (%)', icon: <Info size={16} /> },
-                        { key: 'temperature', label: 'T° (°C)', icon: <Stethoscope size={16} /> },
-                        { key: 'glasgow', label: 'Glasgow', icon: <FileText size={16} /> },
-                      ].map(v => (
-                        <div key={v.key} className="space-y-2">
-                          <label className="text-xs font-bold text-slate-500 flex items-center gap-1 uppercase">
-                            {v.icon} {v.label} <span className="text-red-500">*</span>
-                          </label>
-                          <input 
-                            type="number" 
-                            step={v.key === 'temperature' ? 0.1 : 1}
-                            className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none"
-                            placeholder="---"
-                            value={patient.vitals![v.key as keyof VitalSigns] ?? ''}
-                            onChange={e => {
-                              const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                              setPatient({
-                                ...patient, 
-                                vitals: { ...patient.vitals!, [v.key]: val }
-                              });
-                            }}
-                          />
-                        </div>
-                      ))}
+                        { title: 'Apariencia', key: 'appearance', options: [
+                          { k: 'normal', l: 'Estable / Sin alteración' },
+                          { k: 'abnormalActivity', l: 'Actividad anormal' },
+                          { k: 'unresponsive', l: 'Arreactivo' },
+                          { k: 'abnormalVisualContact', l: 'Contacto visual anormal' },
+                          { k: 'irritableInconsolable', l: 'Irritable, no consolable' },
+                          { k: 'abnormalCry', l: 'Llanto anormal' },
+                          { k: 'abnormalTone', l: 'Tono anormal' },
+                        ]},
+                        { title: 'Respiración', key: 'respiration', options: [
+                          { k: 'normal', l: 'Estable / Sin alteración' },
+                          { k: 'agitation', l: 'Agitación' },
+                          { k: 'apnea', l: 'Apnea' },
+                          { k: 'abnormalPosition', l: 'Posición anormal' },
+                          { k: 'abnormalSounds', l: 'Ruidos anormales' },
+                          { k: 'retractions', l: 'Tirajes' },
+                        ]},
+                        { title: 'Circulación', key: 'circulation', options: [
+                          { k: 'normal', l: 'Estable / Sin alteración' },
+                          { k: 'cyanosis', l: 'Cianosis' },
+                          { k: 'mottled', l: 'Moteado-reticulado' },
+                          { k: 'pallor', l: 'Palidez' },
+                          { k: 'flushing', l: 'Rubicundez' },
+                        ]}
+                      ].map(section => {
+                        const hasSelected = Object.values((patient.tep as any)[section.key]).some(v => v);
+                        return (
+                          <div key={section.title} className={cn(
+                            "p-4 rounded-2xl border transition-all",
+                            hasSelected ? "bg-slate-50 border-blue-200" : "bg-white border-dashed border-slate-300"
+                          )}>
+                            <div className="flex justify-between items-center mb-3 border-b border-slate-300 pb-2">
+                              <h3 className="font-bold text-slate-800">{section.title}</h3>
+                              {hasSelected ? (
+                                <span className="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-bold">Evaluado</span>
+                              ) : (
+                                <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-bold">Pendiente *</span>
+                              )}
+                            </div>
+                            <div className="space-y-2">
+                              {section.options.map(opt => {
+                                const isChecked = !!(patient.tep as any)[section.key][opt.k];
+                                return (
+                                  <label key={opt.k} className={cn(
+                                    "flex items-center gap-2 text-sm cursor-pointer p-2 rounded-lg transition-colors hover:bg-slate-100",
+                                    opt.k === 'normal' && isChecked && "bg-green-50 text-green-800 font-medium hover:bg-green-100",
+                                    opt.k !== 'normal' && isChecked && "bg-red-50 text-red-800 font-medium hover:bg-red-100"
+                                  )}>
+                                    <input 
+                                      type="checkbox" 
+                                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                      checked={isChecked}
+                                      onChange={() => {
+                                        const nextTep = { ...patient.tep! };
+                                        const sectionObj = { ...(nextTep as any)[section.key] };
+                                        
+                                        if (opt.k === 'normal') {
+                                          const isCheckingNow = !sectionObj.normal;
+                                          if (isCheckingNow) {
+                                            // turn off everything, set normal to true
+                                            Object.keys(sectionObj).forEach(key => {
+                                              sectionObj[key] = false;
+                                            });
+                                            sectionObj.normal = true;
+                                          } else {
+                                            sectionObj.normal = false;
+                                          }
+                                        } else {
+                                          // toggle key, set normal to false
+                                          sectionObj[opt.k] = !sectionObj[opt.k];
+                                          sectionObj.normal = false;
+                                        }
+                                        
+                                        (nextTep as any)[section.key] = sectionObj;
+                                        setPatient({ ...patient, tep: nextTep });
+                                      }}
+                                    />
+                                    {opt.l}
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   </motion.div>
                 )}
@@ -478,30 +778,180 @@ DESTINO SUGERIDO: ${triage.destination}
                     className="space-y-6"
                   >
                     <div className="flex items-center gap-2 text-blue-600 mb-4">
+                      <Heart size={24} />
+                      <h2 className="text-xl font-bold">Signos Vitales / Constantes <span className="text-red-500">*</span></h2>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {[
+                        { key: 'heartRate', label: 'FC (lpm)', icon: <Activity size={16} /> },
+                        { key: 'respiratoryRate', label: 'FR (rpm)', icon: <Timer size={16} /> },
+                        { key: 'systolicBP', label: 'PAS (mmHg)', icon: <Activity size={16} /> },
+                        { key: 'diastolicBP', label: 'PAD (mmHg)', icon: <Activity size={16} /> },
+                        { key: 'oxygenSaturation', label: 'SpO2 (%)', icon: <Info size={16} /> },
+                        { key: 'temperature', label: 'T° (°C)', icon: <Stethoscope size={16} /> },
+                        { key: 'glucose', label: 'Glucosa (mg/dl)', icon: <Activity size={16} /> },
+                        { key: 'glasgow', label: 'Glasgow', icon: <FileText size={16} /> },
+                      ].map(v => (
+                        <div key={v.key} className="space-y-2 relative">
+                          <div className="flex justify-between items-center">
+                            <label className="text-xs font-bold text-slate-500 flex items-center gap-1 uppercase">
+                              {v.icon} {v.label} {v.key !== 'glucose' ? <span className="text-red-500">*</span> : <span className="text-slate-400 font-normal lowercase">(opcional)</span>}
+                            </label>
+                            {v.key === 'glasgow' && (
+                              <button 
+                                onClick={() => {
+                                  const newState = !showGlasgowCalc;
+                                  setShowGlasgowCalc(newState);
+                                  if (newState) setGcsTouched({ eye: false, verbal: false, motor: false });
+                                }}
+                                className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold hover:bg-blue-100 transition-colors"
+                              >
+                                {showGlasgowCalc ? 'Cerrar' : 'Calcular GCS'}
+                              </button>
+                            )}
+                          </div>
+                          
+                          {v.key === 'glasgow' && showGlasgowCalc ? (
+                            <div className="bg-slate-50 p-3 rounded-xl border border-blue-100 space-y-3 mt-1">
+                              <div className="flex gap-2 justify-end mb-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setGcsComponents({ eye: 4, verbal: 5, motor: 6 });
+                                    setPatient({ ...patient, vitals: { ...patient.vitals!, glasgow: 15 }});
+                                    setShowGlasgowCalc(false);
+                                  }}
+                                  className="text-[10px] bg-green-100 hover:bg-green-200 text-green-800 px-2.5 py-1 rounded-lg font-bold transition-colors cursor-pointer"
+                                >
+                                  Asignar 15/15
+                                </button>
+                              </div>
+                              <div className="grid grid-cols-1 gap-2">
+                                <div>
+                                  <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Ocular</label>
+                                  <select 
+                                    className="w-full text-xs p-1.5 rounded-lg border border-slate-200 bg-white"
+                                    value={gcsComponents.eye}
+                                    onChange={e => {
+                                      const val = parseInt(e.target.value);
+                                      const next = { ...gcsComponents, eye: val };
+                                      const nextTouched = { ...gcsTouched, eye: true };
+                                      setGcsComponents(next);
+                                      setGcsTouched(nextTouched);
+                                      setPatient({ ...patient, vitals: { ...patient.vitals!, glasgow: next.eye + next.verbal + next.motor }});
+                                      if (nextTouched.eye && nextTouched.verbal && nextTouched.motor) {
+                                        setTimeout(() => setShowGlasgowCalc(false), 500);
+                                      }
+                                    }}
+                                  >
+                                    {GCS_OPTIONS.eye.map(o => <option key={o.value} value={o.value}>{o.value} - {o.label}</option>)}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Verbal</label>
+                                  <select 
+                                    className="w-full text-xs p-1.5 rounded-lg border border-slate-200 bg-white"
+                                    value={gcsComponents.verbal}
+                                    onChange={e => {
+                                      const val = parseInt(e.target.value);
+                                      const next = { ...gcsComponents, verbal: val };
+                                      const nextTouched = { ...gcsTouched, verbal: true };
+                                      setGcsComponents(next);
+                                      setGcsTouched(nextTouched);
+                                      setPatient({ ...patient, vitals: { ...patient.vitals!, glasgow: next.eye + next.verbal + next.motor }});
+                                      if (nextTouched.eye && nextTouched.verbal && nextTouched.motor) {
+                                        setTimeout(() => setShowGlasgowCalc(false), 500);
+                                      }
+                                    }}
+                                  >
+                                    {GCS_OPTIONS.verbal.map(o => <option key={o.value} value={o.value}>{o.value} - {o.label}</option>)}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-black uppercase text-slate-400 mb-1 block">Motor</label>
+                                  <select 
+                                    className="w-full text-xs p-1.5 rounded-lg border border-slate-200 bg-white"
+                                    value={gcsComponents.motor}
+                                    onChange={e => {
+                                      const val = parseInt(e.target.value);
+                                      const next = { ...gcsComponents, motor: val };
+                                      const nextTouched = { ...gcsTouched, motor: true };
+                                      setGcsComponents(next);
+                                      setGcsTouched(nextTouched);
+                                      setPatient({ ...patient, vitals: { ...patient.vitals!, glasgow: next.eye + next.verbal + next.motor }});
+                                      if (nextTouched.eye && nextTouched.verbal && nextTouched.motor) {
+                                        setTimeout(() => setShowGlasgowCalc(false), 500);
+                                      }
+                                    }}
+                                  >
+                                    {GCS_OPTIONS.motor.map(o => <option key={o.value} value={o.value}>{o.value} - {o.label}</option>)}
+                                  </select>
+                                </div>
+                              </div>
+                              <div className="flex justify-between items-center pt-2 border-t border-slate-200">
+                                <span className="text-xs font-bold text-slate-700">Total:</span>
+                                <span className="text-sm font-black text-blue-600 bg-blue-50 px-3 py-1 rounded-full">
+                                  {gcsComponents.eye + gcsComponents.verbal + gcsComponents.motor}/15
+                                </span>
+                              </div>
+                            </div>
+                          ) : (
+                            <input 
+                              type="number" 
+                              step={v.key === 'temperature' ? 0.1 : 1}
+                              className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm"
+                              placeholder="---"
+                              max={v.key === 'glasgow' ? 15 : undefined}
+                              min={v.key === 'glasgow' ? 3 : undefined}
+                              value={patient.vitals![v.key as keyof VitalSigns] ?? ''}
+                              onChange={e => {
+                                let val = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                if (v.key === 'glasgow' && val !== undefined) {
+                                  val = Math.min(15, Math.max(3, val));
+                                }
+                                setPatient({
+                                  ...patient, 
+                                  vitals: { ...patient.vitals!, [v.key]: val }
+                                });
+                              }}
+                            />
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                )}
+
+                {step === 4 && (
+                  <motion.div
+                    key="step4"
+                    initial={{ opacity: 0, x: 20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    exit={{ opacity: 0, x: -20 }}
+                    className="space-y-6"
+                  >
+                    <div className="flex items-center gap-2 text-blue-600 mb-4">
                       <Stethoscope size={24} />
-                      <h2 className="text-xl font-bold">Motivos de Consulta <span className="text-red-500">*</span></h2>
+                      <h2 className="text-xl font-bold">Problema Principal <span className="text-red-500">*</span></h2>
                     </div>
                     
-                    <div className="space-y-6">
-                      <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
-                        <label className="text-sm font-bold text-slate-700 block mb-4">
-                          Seleccione los hallazgos clínicos (Manual Manchester):
-                        </label>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                          {(['ROJO', 'AMARILLO', 'VERDE'] as const).map(level => (
-                            <React.Fragment key={level}>
-                              <div className="col-span-full mt-4 first:mt-0">
-                                <h3 className={cn(
-                                  "text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full inline-block",
-                                  level === 'ROJO' ? "bg-red-100 text-red-700" : 
-                                  level === 'AMARILLO' ? "bg-yellow-100 text-yellow-700" :
-                                  "bg-green-100 text-green-700"
-                                )}>
-                                  Prioridad {level}
-                                </h3>
-                              </div>
-                              {FINDINGS[level].map(f => {
+                    <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200">
+                      {(['LEVEL_I', 'LEVEL_II', 'LEVEL_III', 'LEVEL_IV', 'LEVEL_V'] as const).map(levelKey => {
+                        const levelDisplay = levelKey.split('_')[1];
+                        return (
+                          <div key={levelKey} className="space-y-2">
+                            <h3 className={cn(
+                              "text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full inline-block",
+                              levelDisplay === 'I' ? "bg-red-600 text-white" : 
+                              levelDisplay === 'II' ? "bg-orange-500 text-white" :
+                              levelDisplay === 'III' ? "bg-yellow-500 text-white" :
+                              levelDisplay === 'IV' ? "bg-green-500 text-white" :
+                              "bg-blue-500 text-white"
+                            )}>
+                              Nivel {levelDisplay}
+                            </h3>
+                            <div className="grid grid-cols-1 gap-2">
+                              {FINDINGS[levelKey].map(f => {
                                 const isSelected = patient.findings?.includes(f);
                                 return (
                                   <label
@@ -509,13 +959,13 @@ DESTINO SUGERIDO: ${triage.destination}
                                     className={cn(
                                       "flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all",
                                       isSelected 
-                                        ? "bg-white border-blue-500 ring-1 ring-blue-500 text-blue-800 shadow-sm" 
+                                        ? "bg-blue-50 border-blue-500 ring-1 ring-blue-500 text-blue-800 shadow-sm" 
                                         : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
                                     )}
                                   >
                                     <input 
                                       type="checkbox"
-                                      className="w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
                                       checked={isSelected}
                                       onChange={() => {
                                         const current = patient.findings || [];
@@ -525,14 +975,14 @@ DESTINO SUGERIDO: ${triage.destination}
                                         setPatient({...patient, findings: next});
                                       }}
                                     />
-                                    <span className="text-sm font-medium leading-tight">{f}</span>
+                                    <span className="text-xs font-semibold leading-tight">{f}</span>
                                   </label>
                                 );
                               })}
-                            </React.Fragment>
-                          ))}
-                        </div>
-                      </div>
+                            </div>
+                          </div>
+                        );
+                      })}
 
                       <div className="space-y-2 pt-4 border-t border-slate-100">
                         <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
@@ -540,7 +990,7 @@ DESTINO SUGERIDO: ${triage.destination}
                           Otros Síntomas / Observaciones
                         </label>
                         <textarea 
-                          className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-[100px]"
+                          className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-[80px] text-sm"
                           placeholder="Escriba aquí otros síntomas o detalles relevantes..."
                           value={patient.otherSymptoms}
                           onChange={e => setPatient({...patient, otherSymptoms: e.target.value})}
@@ -550,36 +1000,39 @@ DESTINO SUGERIDO: ${triage.destination}
                   </motion.div>
                 )}
 
-                {step === 4 && (
+                {step === 5 && (
                   <motion.div
-                    key="step4"
+                    key="step5"
                     initial={{ opacity: 0, scale: 0.95 }}
                     animate={{ opacity: 1, scale: 1 }}
                     className="space-y-8 text-center"
                   >
                     <div className="inline-flex flex-col items-center">
                       <div className={cn(
-                        "w-24 h-24 rounded-full flex items-center justify-center mb-4 shadow-2xl animate-pulse",
-                        currentTriage.level === 'ROJO' ? "bg-red-600" :
-                        currentTriage.level === 'AMARILLO' ? "bg-yellow-400" :
-                        "bg-green-600"
+                        "w-32 h-32 rounded-full flex items-center justify-center mb-4 shadow-2xl animate-pulse",
+                        currentTriage.level === 'I' ? "bg-red-600" :
+                        currentTriage.level === 'II' ? "bg-orange-500" :
+                        currentTriage.level === 'III' ? "bg-yellow-400 text-slate-900" :
+                        currentTriage.level === 'IV' ? "bg-green-500" :
+                        "bg-blue-500"
                       )}>
-                        <Activity size={48} className={currentTriage.level === 'AMARILLO' ? 'text-slate-900' : 'text-white'} />
+                        <span className="text-6xl font-black">{currentTriage.level}</span>
                       </div>
                       <h2 className={cn(
-                        "text-4xl font-black mb-2",
-                        currentTriage.level === 'ROJO' ? "text-red-600" :
-                        currentTriage.level === 'AMARILLO' ? "text-yellow-600" :
-                        "text-green-600"
+                        "text-3xl font-black mb-2",
+                        currentTriage.level === 'I' ? "text-red-600" :
+                        currentTriage.level === 'II' ? "text-orange-600" :
+                        currentTriage.level === 'III' ? "text-yellow-600" :
+                        currentTriage.level === 'IV' ? "text-green-600" :
+                        "text-blue-600"
                       )}>
-                        {currentTriage.level}
+                        {currentTriage.priority}
                       </h2>
-                      <p className="text-xl font-bold text-slate-700">{currentTriage.priority}</p>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-md mx-auto">
                       <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                        <p className="text-xs font-bold text-slate-400 uppercase mb-1">Tiempo de Espera</p>
+                        <p className="text-xs font-bold text-slate-400 uppercase mb-1">Tiempo de Atención</p>
                         <p className="text-lg font-black text-slate-800">{currentTriage.wait}</p>
                       </div>
                       <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
@@ -601,7 +1054,7 @@ DESTINO SUGERIDO: ${triage.destination}
                           Copiar Texto
                         </button>
                       </div>
-                      <pre className="text-xs font-mono text-slate-300 whitespace-pre-wrap bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                      <pre className="text-[10px] font-mono text-slate-300 whitespace-pre-wrap bg-slate-800/50 p-4 rounded-xl border border-slate-700">
                         {getSummaryText(patient as PatientData)}
                       </pre>
                     </div>
@@ -611,7 +1064,7 @@ DESTINO SUGERIDO: ${triage.destination}
 
               {/* Navigation Buttons */}
               <div className="flex justify-between mt-12 pt-8 border-t border-slate-100">
-                {step > 1 && step < 4 && (
+                {step > 1 && step < 5 && (
                   <button 
                     onClick={handleBack}
                     className="flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-all"
@@ -620,7 +1073,7 @@ DESTINO SUGERIDO: ${triage.destination}
                   </button>
                 )}
                 <div className="flex-1" />
-                {step < 4 ? (
+                {step < 5 ? (
                   <button 
                     onClick={handleNext}
                     disabled={!isStepValid()}
@@ -666,9 +1119,9 @@ DESTINO SUGERIDO: ${triage.destination}
                   const minutesIn = differenceInMinutes(currentTime, new Date(p.arrivalDate));
                   const hoursIn = differenceInHours(currentTime, new Date(p.arrivalDate));
                   
-                  // Alert logic: 4h for Red/Orange, 12h for Yellow
-                  const isAlert = (p.triageLevel === 'ROJO' && hoursIn >= 4) || 
-                                  (p.triageLevel === 'AMARILLO' && hoursIn >= 12);
+                  // Alert logic: 4h for Level I/II (Resuscitation/Emergency), 12h for Level III (Urgent)
+                  const isAlert = ((p.triageLevel === 'I' || p.triageLevel === 'II') && hoursIn >= 4) || 
+                                  (p.triageLevel === 'III' && hoursIn >= 12);
 
                   return (
                     <div key={p.id} className={cn(
@@ -677,12 +1130,14 @@ DESTINO SUGERIDO: ${triage.destination}
                     )}>
                       <div className="flex justify-between items-start mb-2">
                         <span className={cn(
-                          "text-[10px] font-black px-2 py-0.5 rounded-full",
-                          p.triageLevel === 'ROJO' ? "bg-red-600 text-white" :
-                          p.triageLevel === 'AMARILLO' ? "bg-yellow-400 text-slate-900" :
-                          "bg-green-600 text-white"
+                          "text-[10px] font-black px-2 py-0.5 rounded-full text-white",
+                          p.triageLevel === 'I' ? "bg-red-600" :
+                          p.triageLevel === 'II' ? "bg-orange-500" :
+                          p.triageLevel === 'III' ? "bg-yellow-500 text-slate-900" :
+                          p.triageLevel === 'IV' ? "bg-green-600" :
+                          "bg-blue-600"
                         )}>
-                          {p.triageLevel}
+                          NIVEL {p.triageLevel}
                         </span>
                         <span className="text-[10px] font-mono text-slate-400">{p.id}</span>
                       </div>
@@ -711,16 +1166,17 @@ DESTINO SUGERIDO: ${triage.destination}
             </div>
           </div>
 
-          <div className="bg-blue-600 p-6 rounded-3xl text-white shadow-xl shadow-blue-200/50">
+          <div className="bg-slate-900 p-6 rounded-3xl text-white shadow-xl shadow-slate-200/50">
             <h3 className="font-bold mb-2 flex items-center gap-2">
-              <Info size={18} />
-              Manual Cecilia Grierson
+              <Info size={18} className="text-blue-400" />
+              Manual CTAS / Canadiense
             </h3>
-            <p className="text-xs text-blue-100 leading-relaxed">
-              Este sistema implementa la jerarquía de Manchester:
-              1. ABC Checklist (Vital)
-              2. Rangos de Signos Vitales (Crítico)
-              3. Hallazgos Clínicos (Específico)
+            <p className="text-[10px] text-slate-400 leading-relaxed">
+              Este sistema implementa la escala CTAS de 5 niveles:
+              1. Nivel I (Resucitación) - Crítico
+              2. Nivel II (Emergencia) - 15 min
+              3. Nivel III (Urgente) - 30 min
+              4. Nivel IV/V (Observación)
             </p>
             <button 
               onClick={() => {

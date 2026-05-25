@@ -1,5 +1,5 @@
 {
-  "name": "Triaje Manchester Grierson",
-  "description": "Aplicación de triaje clínico basada en el manual del Hospital Gral. de Agudos \"Dra. Cecilia Grierson\" y el Sistema de Triaje de Manchester.",
+  "name": "Triaje Grierson CTAS",
+  "description": "Herramienta para el triaje clínico basada en el Sistema Canadiense (CTAS) para el Hospital Gral. de Agudos \"Dra. Cecilia Grierson\".",
   "requestFramePermissions": []
 }
