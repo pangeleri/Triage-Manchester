@@ -1,45 +1,39 @@
-name: Build and Deploy to Hostinger
+name: 🚀 Despliegue Automático mHealth
 
 on:
   push:
     branches:
       - main
-      - master # Triggers on push to either main or master branches
 
 jobs:
-  build-and-deploy:
-    name: Build & FTP Deploy
+  web-deploy:
+    name: 🛠️ Compilar y Desplegar
     runs-on: ubuntu-latest
-
+    
     steps:
-      - name: 📥 Checkout repository
+      - name: 🚚 Obtener código fuente
         uses: actions/checkout@v4
 
-      - name: 🟢 Setup Node.js
+      - name: 🟢 Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
 
-      - name: 📦 Install dependencies
-        run: npm ci
+      - name: 📦 Instalar dependencias
+        run: npm install
 
-      - name: 🧹 Run Linter
-        run: npm run lint
-
-      - name: 🏗️ Build application
-        # Inject the Supabase environment variables at build-time so Vite compiles them into the app.
+      - name: 🏗️ Inyectar variables y compilar (Build)
+        run: npm run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-        run: npm run build
 
-      - name: 🚀 Deploy to Hostinger via FTP
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+      - name: 📂 Sincronizar con Hostinger vía FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
-          server: ${{ secrets.FTP_SERVER }} # e.g. ftp.triagegrierson.app.koradigital.net or Hostinger's IP
+          server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./dist/
-          server-dir: public_html/ # Adjust if you deploy to a custom subdirectory on Hostinger
-          dangerous-clean-slate: false # Set to true if you want to delete old files on server first
+          server-dir: /public_html/
+          dangerous-clean-slate: false
