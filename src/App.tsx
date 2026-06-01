@@ -13,7 +13,11 @@ import {
   User, 
   ChevronRight,
   ChevronLeft,
-  Timer
+  Timer,
+  RefreshCw,
+  Database,
+  Github,
+  Globe
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -21,6 +25,7 @@ import { format, differenceInMinutes, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from './lib/utils';
 import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle } from './types';
+import { isSupabaseConfigured, saveTriageRecord, fetchTriageRecords } from './lib/supabase';
 
 // --- Constants & Helpers ---
 
@@ -137,6 +142,13 @@ export default function App() {
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [tepForcedRed, setTepForcedRed] = useState(false);
 
+  // Sidebar Tabs & Supabase Sync states
+  const [sidebarTab, setSidebarTab] = useState<'pacientes' | 'database' | 'despliegue'>('pacientes');
+  const [dbSaving, setDbSaving] = useState(false);
+  const [dbSuccessMessage, setDbSuccessMessage] = useState<string | null>(null);
+  const [dbErrorMessage, setDbErrorMessage] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+
   // Helper to count altered sides in TEP
   const getTepLadosAlterados = (data: Partial<PatientData>) => {
     if (data.type !== 'pediatric' || !data.tep) return 0;
@@ -163,7 +175,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Load history from localStorage
+  // Load history from localStorage and sync with Supabase if configured
   useEffect(() => {
     const localData = localStorage.getItem('triage_history');
     if (localData) {
@@ -173,7 +185,51 @@ export default function App() {
         console.error('Error reading offline history:', e);
       }
     }
+
+    if (isSupabaseConfigured) {
+      const syncSupabase = async () => {
+        setIsSyncing(true);
+        try {
+          const remoteRecords = await fetchTriageRecords();
+          if (remoteRecords && remoteRecords.length > 0) {
+            setHistory(remoteRecords);
+            localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
+            setDbSuccessMessage('Conexión con Supabase establecida. Datos sincronizados.');
+            setTimeout(() => setDbSuccessMessage(null), 5000);
+          }
+        } catch (e: any) {
+          setDbErrorMessage('Error al sincronizar con Supabase: ' + (e?.message || e));
+          setTimeout(() => setDbErrorMessage(null), 5000);
+        } finally {
+          setIsSyncing(false);
+        }
+      };
+      syncSupabase();
+    }
   }, []);
+
+  const triggerManualSync = async () => {
+    if (!isSupabaseConfigured) {
+      setDbErrorMessage('Supabase no está configurado. Revisa la pestaña de Base de Datos para configurarlo.');
+      setTimeout(() => setDbErrorMessage(null), 5000);
+      return;
+    }
+    setIsSyncing(true);
+    setDbSuccessMessage(null);
+    setDbErrorMessage(null);
+    try {
+      const remoteRecords = await fetchTriageRecords();
+      setHistory(remoteRecords);
+      localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
+      setDbSuccessMessage('Base de datos sincronizada con éxito.');
+      setTimeout(() => setDbSuccessMessage(null), 4000);
+    } catch (e: any) {
+      setDbErrorMessage('Error de sincronización: ' + (e?.message || e));
+      setTimeout(() => setDbErrorMessage(null), 5000);
+    } finally {
+      setIsSyncing(false);
+    }
+  };
 
   // --- Logic Functions ---
 
@@ -481,6 +537,32 @@ export default function App() {
     setStep(1);
     setTepForcedRed(false);
     setShowAlertModal(false);
+
+    // Save to Supabase in background if configured
+    if (isSupabaseConfigured) {
+      setDbSaving(true);
+      setDbSuccessMessage(null);
+      setDbErrorMessage(null);
+      try {
+        const res = await saveTriageRecord(finalPatient);
+        if (res.success) {
+          setDbSuccessMessage('Registro guardado en Supabase con éxito.');
+          // Refresh list to ensure we have structural sync
+          const remoteRecords = await fetchTriageRecords();
+          setHistory(remoteRecords);
+          localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
+          setTimeout(() => setDbSuccessMessage(null), 3000);
+        } else {
+          setDbErrorMessage('No se pudo guardar en Supabase: ' + res.error);
+          setTimeout(() => setDbErrorMessage(null), 6000);
+        }
+      } catch (err: any) {
+        setDbErrorMessage('Excepción de Supabase: ' + (err?.message || err));
+        setTimeout(() => setDbErrorMessage(null), 6000);
+      } finally {
+        setDbSaving(false);
+      }
+    }
   };
 
   const generatePDF = (p: PatientData) => {
@@ -1307,71 +1389,328 @@ DESTINO SUGERIDO: ${triage.destination}
 
         {/* Sidebar: History & Timers */}
         <aside className="space-y-6 w-full lg:max-w-[340px]">
-          {/* Pacientes en Espera */}
-          <div className="bg-white p-6 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 space-y-4">
-            <div className="flex justify-between items-center">
-              <h2 className="text-lg font-bold flex items-center gap-2 text-slate-800">
-                <Timer size={20} className="text-blue-600" />
-                Pacientes en Espera
-              </h2>
-            </div>
+          {/* Navigation Tabs */}
+          <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200">
+            <button
+              onClick={() => setSidebarTab('pacientes')}
+              className={cn(
+                "flex-1 py-2 rounded-xl text-[11px] font-bold transition-all flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer",
+                sidebarTab === 'pacientes'
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-900"
+              )}
+            >
+              <User size={13} className={sidebarTab === 'pacientes' ? 'text-blue-600' : ''} />
+              <span>Pacientes</span>
+            </button>
+            <button
+              onClick={() => setSidebarTab('database')}
+              className={cn(
+                "flex-1 py-2 rounded-xl text-[11px] font-bold transition-all flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer",
+                sidebarTab === 'database'
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-900"
+              )}
+            >
+              <Database size={13} className={sidebarTab === 'database' ? 'text-blue-600' : ''} />
+              <span>Supabase</span>
+            </button>
+            <button
+              onClick={() => setSidebarTab('despliegue')}
+              className={cn(
+                "flex-1 py-2 rounded-xl text-[11px] font-bold transition-all flex flex-col sm:flex-row items-center justify-center gap-1 cursor-pointer",
+                sidebarTab === 'despliegue'
+                  ? "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-500 hover:text-slate-900"
+              )}
+            >
+              <Globe size={13} className={sidebarTab === 'despliegue' ? 'text-blue-600' : ''} />
+              <span>Despliegue</span>
+            </button>
+          </div>
 
-            <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
-              {history.length === 0 ? (
-                <div className="text-center py-10 text-slate-400">
-                  <p className="text-sm italic">No hay pacientes registrados</p>
+          {/* Sync Status Notifications inside Sidebar */}
+          {dbSuccessMessage && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="p-3 bg-green-50 border border-green-200 text-green-800 text-[10px] rounded-xl font-bold flex items-center gap-2"
+            >
+              <CheckCircle2 size={13} className="text-green-600 shrink-0" />
+              <span>{dbSuccessMessage}</span>
+            </motion.div>
+          )}
+
+          {dbErrorMessage && (
+            <motion.div 
+              initial={{ opacity: 0, y: -10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="p-3 bg-red-50 border border-red-200 text-red-800 text-[10px] rounded-xl font-bold flex items-center gap-2"
+            >
+              <AlertCircle size={13} className="text-red-600 shrink-0" />
+              <span>{dbErrorMessage}</span>
+            </motion.div>
+          )}
+
+          {/* Tab 1: Pacientes en Espera */}
+          {sidebarTab === 'pacientes' && (
+            <div className="bg-white p-6 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-[17px] font-bold flex items-center gap-2 text-slate-800">
+                  <Timer size={18} className="text-blue-600" />
+                  Pacientes en Espera
+                </h2>
+                {isSupabaseConfigured && (
+                  <button
+                    onClick={triggerManualSync}
+                    disabled={isSyncing}
+                    title="Sincronizar base de datos remota"
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-slate-50 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <RefreshCw size={14} className={cn(isSyncing && "animate-spin")} />
+                  </button>
+                )}
+              </div>
+
+              {isSupabaseConfigured ? (
+                <div className="text-[10px] bg-green-50 text-green-800 px-3 py-1.5 rounded-xl border border-green-100 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                    <span>Conectado a Supabase</span>
+                  </div>
                 </div>
               ) : (
-                history.map(p => {
-                  const minutesIn = differenceInMinutes(currentTime, new Date(p.arrivalDate));
-                  const hoursIn = differenceInHours(currentTime, new Date(p.arrivalDate));
-                  
-                  // Alert logic: 4h for Level I/II (Resuscitation/Emergency), 12h for Level III (Urgent)
-                  const isAlert = ((p.triageLevel === 'I' || p.triageLevel === 'II') && hoursIn >= 4) || 
-                                  (p.triageLevel === 'III' && hoursIn >= 12);
-
-                  return (
-                    <div key={p.id} className={cn(
-                      "p-4 rounded-2xl border transition-all",
-                      isAlert ? "bg-red-50 border-red-200 animate-pulse" : "bg-slate-50 border-slate-100"
-                    )}>
-                      <div className="flex justify-between items-start mb-2">
-                        <span className={cn(
-                          "text-[10px] font-black px-2 py-0.5 rounded-full text-white",
-                          p.triageLevel === 'I' ? "bg-red-600" :
-                          p.triageLevel === 'II' ? "bg-orange-500" :
-                          p.triageLevel === 'III' ? "bg-yellow-500 text-slate-900" :
-                          p.triageLevel === 'IV' ? "bg-green-600" :
-                          "bg-blue-600"
-                        )}>
-                          NIVEL {p.triageLevel}
-                        </span>
-                        <span className="text-[10px] font-mono text-slate-400">{p.id}</span>
-                      </div>
-                      <p className="font-bold text-slate-800 truncate">{p.name}</p>
-                      <div className="flex items-center justify-between mt-3">
-                        <div className="flex items-center gap-1 text-slate-500">
-                          <Clock size={12} />
-                          <span className="text-xs font-bold">
-                            {hoursIn}h {minutesIn % 60}m
-                          </span>
-                        </div>
-                        <div className="flex gap-2">
-                          <button 
-                            onClick={() => generatePDF(p)}
-                            className="p-2 bg-white rounded-lg border border-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
-                            title="Descargar PDF"
-                          >
-                            <Download size={14} />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
+                <div className="text-[10px] bg-slate-50 text-slate-500 px-3 py-1.5 rounded-xl border border-slate-100 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                    <span>Modo Local / Sin Conexión</span>
+                  </div>
+                </div>
               )}
+
+              <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+                {history.length === 0 ? (
+                  <div className="text-center py-10 text-slate-400">
+                    <p className="text-sm italic">No hay pacientes registrados</p>
+                  </div>
+                ) : (
+                  history.map(p => {
+                    const minutesIn = differenceInMinutes(currentTime, new Date(p.arrivalDate));
+                    const hoursIn = differenceInHours(currentTime, new Date(p.arrivalDate));
+                    
+                    // Alert logic: 4h for Level I/II (Resuscitation/Emergency), 12h for Level III (Urgent)
+                    const isAlert = ((p.triageLevel === 'I' || p.triageLevel === 'II') && hoursIn >= 4) || 
+                                    (p.triageLevel === 'III' && hoursIn >= 12);
+
+                    return (
+                      <div key={p.id} className={cn(
+                        "p-4 rounded-2xl border transition-all",
+                        isAlert ? "bg-red-50 border-red-200 animate-pulse" : "bg-slate-50 border-slate-100"
+                      )}>
+                        <div className="flex justify-between items-start mb-2">
+                          <span className={cn(
+                            "text-[10px] font-black px-2 py-0.5 rounded-full text-white",
+                            p.triageLevel === 'I' ? "bg-red-600" :
+                            p.triageLevel === 'II' ? "bg-orange-500" :
+                            p.triageLevel === 'III' ? "bg-yellow-500 text-slate-900" :
+                            p.triageLevel === 'IV' ? "bg-green-600" :
+                            "bg-blue-600"
+                          )}>
+                            NIVEL {p.triageLevel}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-400">{p.id}</span>
+                        </div>
+                        <p className="font-bold text-slate-800 truncate text-[14px]">{p.name}</p>
+                        <div className="flex items-center justify-between mt-3 text-xs">
+                          <div className="flex items-center gap-1 text-slate-500">
+                            <Clock size={12} />
+                            <span className="font-bold">
+                              {hoursIn}h {minutesIn % 60}m
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button 
+                              onClick={() => generatePDF(p)}
+                              className="p-1.5 bg-white rounded-lg border border-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
+                              title="Descargar PDF"
+                            >
+                              <Download size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
-          </div>
+          )}
+
+          {/* Tab 2: Supabase connection guide */}
+          {sidebarTab === 'database' && (
+            <div className="bg-white p-6 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 space-y-4 text-left">
+              <h2 className="text-base font-bold flex items-center gap-2 text-slate-800">
+                <Database size={18} className="text-blue-600" />
+                Conectividad Supabase
+              </h2>
+
+              <div className={cn(
+                "p-3 rounded-2xl border text-xs font-bold flex items-center justify-between",
+                isSupabaseConfigured 
+                  ? "bg-green-50 border-green-200 text-green-800" 
+                  : "bg-amber-50 border-amber-200 text-amber-800"
+              )}>
+                <span>Estado actual: {isSupabaseConfigured ? 'Conectado / Activo' : 'Pendiente / Local'}</span>
+                <span className={cn("w-2 h-2 rounded-full", isSupabaseConfigured ? "bg-green-500 animate-pulse" : "bg-amber-500")} />
+              </div>
+
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Este sistema sincroniza automáticamente con Supabase si las credenciales están activas. En su defecto, utiliza la memoria local <code className="bg-slate-100 px-1 rounded text-red-650 font-bold font-mono text-[9px]">localStorage</code> para funcionamiento offline completo.
+              </p>
+
+              <div className="space-y-3 text-xs text-slate-600">
+                <div>
+                  <p className="font-bold text-slate-800">1. Credenciales en archivo `.env` o Hosting:</p>
+                  <pre className="p-2.5 bg-slate-900 text-slate-300 rounded-xl font-mono text-[9px] block whitespace-pre overflow-x-auto border border-slate-850 mt-1 select-all">
+{`VITE_SUPABASE_URL=https://tu-proyecto.supabase.co
+VITE_SUPABASE_ANON_KEY=tu_anon_clave_aqui`}
+                  </pre>
+                </div>
+
+                <div>
+                  <div className="flex justify-between items-center">
+                    <p className="font-bold text-slate-800">2. Esqueleto SQL de Tabla:</p>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(`create table triage_records (
+  id text primary key,
+  name text not null,
+  age numeric,
+  age_unit text not null,
+  gender text not null,
+  document_id text not null,
+  arrival_date timestamp with time zone not null,
+  type text not null,
+  tep jsonb,
+  vitals jsonb not null,
+  findings text[] default '{}',
+  other_symptoms text,
+  triage_level text not null,
+  original_priority text not null,
+  wait_time text not null,
+  suggested_destination text not null,
+  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+);
+
+alter table triage_records enable row level security;
+create policy "Allow insert" on triage_records for insert with check (true);
+create policy "Allow select" on triage_records for select using (true);`);
+                        alert('¡Esquema SQL copiado al portapapeles!');
+                      }}
+                      className="text-[9px] text-blue-600 hover:underline font-bold"
+                    >
+                      Copiar SQL
+                    </button>
+                  </div>
+                  <pre className="p-2.5 bg-slate-900 text-slate-300 rounded-xl font-mono text-[9px] block whitespace-pre max-h-[140px] overflow-y-auto overflow-x-auto border border-slate-850 mt-1 select-all">
+{`create table triage_records (
+  id text primary key,
+  name text not null,
+  age numeric,
+  age_unit text not null,
+  gender text not null,
+  document_id text not null,
+  arrival_date timestamp with time zone not null,
+  type text not null,
+  tep jsonb,
+  vitals jsonb not null,
+  findings text[] default '{}',
+  other_symptoms text,
+  triage_level text not null,
+  original_priority text not null,
+  wait_time text not null,
+  suggested_destination text not null,
+  created_at timestamp default now()
+);
+
+-- Políticas RLS recomendadas
+alter table triage_records enable row level security;
+create policy "Permitir insert" on triage_records for insert with check (true);
+create policy "Permitir select" on triage_records for select using (true);`}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Tab 3: Git & Hostinger Pipeline */}
+          {sidebarTab === 'despliegue' && (
+            <div className="bg-white p-6 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 space-y-4 text-left text-xs leading-relaxed text-slate-600">
+              <h2 className="text-base font-bold flex items-center gap-2 text-slate-800">
+                <Github size={18} className="text-blue-600" />
+                Despliegue Git & Hostinger
+              </h2>
+
+              <div className="p-3 bg-blue-50 border border-blue-100 rounded-2xl text-[10px] text-blue-800 space-y-1">
+                <p className="font-bold flex items-center gap-1.5 text-slate-800">
+                  <Globe size={13} className="text-blue-600" />
+                  Dominio en producción:
+                </p>
+                <a 
+                  href="https://triagegrierson.app.koradigital.net" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="font-mono text-[9px] font-bold break-all text-blue-700 underline hover:text-blue-950 block"
+                >
+                  triagegrierson.app.koradigital.net
+                </a>
+              </div>
+
+              <div className="space-y-3">
+                <div className="border-b border-slate-100 pb-2">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-1 text-[11px]">
+                    <span className="bg-blue-100 text-blue-700 w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-black">1</span>
+                    Exportar a su GitHub
+                  </h3>
+                  <p className="text-slate-500 text-[10px] mt-0.5">
+                    Utilice el menú superior derecho de AI Studio para exportar el código de este applet directamente a su repositorio GitHub.
+                  </p>
+                </div>
+
+                <div className="border-b border-slate-100 pb-2">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-1 text-[11px]">
+                    <span className="bg-blue-100 text-blue-700 w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-black">2</span>
+                    Compilar localmente
+                  </h3>
+                  <p className="text-slate-500 text-[10px]">
+                    Para generar el paquete de distribución estática optimizado, ejecute en su terminal:
+                    <code className="bg-slate-100 text-red-500 font-mono font-bold px-1 rounded text-[9px] block mt-1 py-0.5 text-center">npm run build</code>
+                    Esto generará el bloque completo en la carpeta <code className="bg-slate-50 font-bold px-1 rounded text-[9px]">/dist</code>.
+                  </p>
+                </div>
+
+                <div className="space-y-1">
+                  <h3 className="font-bold text-slate-800 flex items-center gap-1 text-[11px]">
+                    <span className="bg-blue-100 text-blue-700 w-4 h-4 rounded-full text-[9px] flex items-center justify-center font-black">3</span>
+                    Enrutamiento Hostinger SPA
+                  </h3>
+                  <p className="text-slate-500 text-[10px]">
+                    Para evitar errores de recarga de página (404 Not Found), cree este archivo <span className="font-bold text-slate-700">.htaccess</span> en la raíz <code className="font-mono bg-slate-50 px-1 text-red-600 rounded text-[9px]">/public_html</code> de Hostinger:
+                  </p>
+                  <pre className="p-2 bg-slate-900 text-slate-300 rounded-xl font-mono text-[8px] overflow-x-auto whitespace-pre border border-slate-800 mt-1 select-all">
+{`<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+  RewriteRule ^index\\.html$ - [L]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /index.html [L]
+</IfModule>`}
+                  </pre>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Quick manual / info block */}
           <div className="bg-slate-900 p-6 rounded-3xl text-white shadow-xl shadow-slate-200/50">
