@@ -27,15 +27,25 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
-
-      - name: 📂 Sincronizar con Hostinger vía FTP
+          
+- name: 📂 Sincronizar con Hostinger vía FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.4
         with:
           server: ${{ secrets.FTP_SERVER }}
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./dist/
-          server-dir: /public_html/
+          server-dir: public/
+          port: 21
           dangerous-clean-slate: false
-          security: loose
-          timeout: 600000
+          state-name: .ftp-deploy-sync-state-sub.json # <-- Forzamos un historial limpio para el subdominio
+
+          
+          
+          
+          
+          
+          
+
+          
+          
