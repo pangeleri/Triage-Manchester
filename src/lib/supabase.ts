@@ -1,8 +1,19 @@
 import { createClient } from '@supabase/supabase-js';
 import { PatientData } from '../types';
 
-const supabaseUrl = (import.meta as any).env.VITE_SUPABASE_URL;
-const supabaseAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY;
+const rawUrl = (import.meta as any).env.VITE_SUPABASE_URL || '';
+const rawAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || '';
+
+// Clean trailing /rest/v1/ or /rest/v1 if included by mistake
+let cleanedUrl = rawUrl.trim();
+if (cleanedUrl.endsWith('/rest/v1/')) {
+  cleanedUrl = cleanedUrl.slice(0, -9);
+} else if (cleanedUrl.endsWith('/rest/v1')) {
+  cleanedUrl = cleanedUrl.slice(0, -8);
+}
+
+const supabaseUrl = cleanedUrl;
+const supabaseAnonKey = rawAnonKey.trim();
 
 export const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey);
 
