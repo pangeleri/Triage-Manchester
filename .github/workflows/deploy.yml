@@ -30,13 +30,13 @@ jobs:
             exit 1
           fi
           ls -la dist/
-      - name: 📂 Sincronizar con Hostinger vía SSH
-        uses: burnett01/rsync-deployments@7.0.1
+      - name: 📂 Sincronizar con Hostinger vía SFTP
+        uses: wlixcc/SFTP-Deploy-Action@v1.2.4
         with:
-          switches: -avzr --delete
-          path: dist/
+          server: ${{ secrets.FTP_SERVER }}
+          port: 65002
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local_path: ./dist/*
           remote_path: /home/u911641859/domains/controldesalud.koradigital.net/public_html/
-          remote_host: 147.79.84.184
-          remote_port: 65002
-          remote_user: u911641859
-          remote_key: ${{ secrets.SSH_PRIVATE_KEY }}
+          sftp_only: true
