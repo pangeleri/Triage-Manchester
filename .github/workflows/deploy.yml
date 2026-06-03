@@ -1,8 +1,10 @@
 name: 🚀 Despliegue Automático mHealth
+
 on:
   push:
     branches:
       - main
+
 jobs:
   web-deploy:
     name: 🛠️ Compilar y Desplegar
@@ -11,18 +13,22 @@ jobs:
     steps:
       - name: 🚚 Obtener código fuente
         uses: actions/checkout@v4
+
       - name: 🟢 Configurar Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
+
       - name: 📦 Instalar dependencias
         run: npm install
+
       - name: 🏗️ Inyectar variables y compilar (Build)
         run: npm run build
         env:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
       - name: 🔍 Verificar build
         run: |
           if [ ! -d "dist" ]; then
@@ -30,6 +36,7 @@ jobs:
             exit 1
           fi
           ls -la dist/
+
       - name: 📂 Sincronizar con Hostinger vía FTP
         uses: SamKirkland/FTP-Deploy-Action@v4.3.5
         with:
@@ -37,8 +44,8 @@ jobs:
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./dist/
-          server-dir: ./
-          protocol: ftps
+          server-dir: ./triagegrierson.koradigital.net/public_html/
+          protocol: ftp
           dangerous-clean-slate: false
           exclude: |
             **/.env*
