@@ -44,7 +44,7 @@ jobs:
           username: ${{ secrets.FTP_USERNAME }}
           password: ${{ secrets.FTP_PASSWORD }}
           local-dir: ./dist/
-          server-dir: ./triagegrierson.koradigital.net/public_html/
+          server-dir: ./
           protocol: ftp
           dangerous-clean-slate: false
           exclude: |
