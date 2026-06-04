@@ -140,6 +140,8 @@ export default function App() {
   const [gcsTouched, setGcsTouched] = useState({ eye: false, verbal: false, motor: false });
 
   const [showAlertModal, setShowAlertModal] = useState(false);
+  const [showFindingsAlert, setShowFindingsAlert] = useState(false);
+  const [findingsAlertDismissed, setFindingsAlertDismissed] = useState(false);
   const [tepForcedRed, setTepForcedRed] = useState(false);
 
   // Supabase Sync states
@@ -165,6 +167,22 @@ export default function App() {
     if (Object.entries(appearance).some(([k, v]) => k !== 'normal' && v)) list.push('Apariencia');
     if (Object.entries(respiration).some(([k, v]) => k !== 'normal' && v)) list.push('Respiración');
     if (Object.entries(circulation).some(([k, v]) => k !== 'normal' && v)) list.push('Circulación');
+    return list;
+  };
+
+  const getSelectedHighAcuityFindings = () => {
+    const list: { finding: string; level: 'I' | 'II' | 'III'; color: string; label: string }[] = [];
+    if (!patient.findings) return list;
+    
+    patient.findings.forEach(f => {
+      if (FINDINGS.LEVEL_I.includes(f)) {
+        list.push({ finding: f, level: 'I', color: 'bg-red-600 text-white', label: 'Nivel I - Resucitación' });
+      } else if (FINDINGS.LEVEL_II.includes(f)) {
+        list.push({ finding: f, level: 'II', color: 'bg-orange-500 text-white', label: 'Nivel II - Emergencia' });
+      } else if (FINDINGS.LEVEL_III.includes(f)) {
+        list.push({ finding: f, level: 'III', color: 'bg-yellow-500 text-slate-900', label: 'Nivel III - Urgente' });
+      }
+    });
     return list;
   };
 
@@ -501,6 +519,18 @@ export default function App() {
         }
       }
 
+      if (step === 3 && !findingsAlertDismissed) {
+        const hasHighAcuityFinding = patient.findings?.some(f => 
+          FINDINGS.LEVEL_I.includes(f) || 
+          FINDINGS.LEVEL_II.includes(f) || 
+          FINDINGS.LEVEL_III.includes(f)
+        );
+        if (hasHighAcuityFinding) {
+          setShowFindingsAlert(true);
+          return;
+        }
+      }
+
       if (step === 1 && patient.type === 'adult') {
         setStep(3); // Skip TEP for adults
       } else {
@@ -538,6 +568,8 @@ export default function App() {
     setStep(1);
     setTepForcedRed(false);
     setShowAlertModal(false);
+    setShowFindingsAlert(false);
+    setFindingsAlertDismissed(false);
 
     // Save to Supabase in background if configured
     if (isSupabaseConfigured) {
@@ -1512,6 +1544,8 @@ DESTINO SUGERIDO: ${triage.destination}
                 setStep(1);
                 setTepForcedRed(false);
                 setShowAlertModal(false);
+                setShowFindingsAlert(false);
+                setFindingsAlertDismissed(false);
               }}
               className="w-full mt-4 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
@@ -1593,6 +1627,119 @@ DESTINO SUGERIDO: ${triage.destination}
                   className="order-1 sm:order-2 px-5 py-2.5 rounded-xl text-white bg-red-600 hover:bg-red-700 font-bold text-sm tracking-wide transition-all shadow-lg shadow-red-200 active:scale-95 cursor-pointer"
                 >
                   Confirmar Triage Rojo
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {showFindingsAlert && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl overflow-hidden shadow-2xl max-w-lg w-full border border-slate-100"
+            >
+              {/* Encabezado dinámico según máxima gravedad */}
+              {(() => {
+                const list = getSelectedHighAcuityFindings();
+                const hasLevelI = list.some(item => item.level === 'I');
+                const hasLevelII = list.some(item => item.level === 'II');
+                
+                let headerBg = "bg-amber-500 text-slate-950";
+                let badgeText = "Prioridad 3 - Urgente";
+                let titleText = "¡ADVERTENCIA: MOTIVO URGENTE!";
+                let iconColor = "text-slate-950";
+
+                if (hasLevelI) {
+                  headerBg = "bg-red-600 text-white";
+                  badgeText = "Prioridad 1 - Resucitación";
+                  titleText = "¡ALERTA CRÍTICA: RIESGO VITAL!";
+                  iconColor = "text-white";
+                } else if (hasLevelII) {
+                  headerBg = "bg-orange-500 text-white";
+                  badgeText = "Prioridad 2 - Emergencia";
+                  titleText = "¡ALERTA DE EMERGENCIA!";
+                  iconColor = "text-white";
+                }
+
+                return (
+                  <div className={cn("p-6 flex items-center gap-3", headerBg)}>
+                    <div className="p-2 bg-white/20 rounded-2xl">
+                      <AlertCircle size={28} className={cn(iconColor, "animate-pulse")} />
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-black tracking-widest uppercase opacity-80 block">{badgeText}</span>
+                      <h3 className="text-base font-black tracking-tight uppercase">
+                        {titleText}
+                      </h3>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* Mensaje Central */}
+              <div className="p-6 space-y-4">
+                <div className="p-4 bg-slate-50 border border-slate-100 rounded-2xl">
+                  <p className="text-sm font-bold text-slate-800 leading-relaxed">
+                    Se han identificado motivos de consulta de alta prioridad (Nivel I, II o III).
+                  </p>
+                  <p className="text-xs text-slate-600 mt-2 leading-relaxed">
+                    De acuerdo con el protocolo de triaje CTAS, estos pacientes deben ser priorizados para la toma de constantes vitales y la asignación final de destino de forma urgente.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">Motivos de alta prioridad seleccionados:</span>
+                  <div className="space-y-2 max-h-[160px] overflow-y-auto pr-1">
+                    {getSelectedHighAcuityFindings().map((item, idx) => (
+                      <div key={idx} className="text-xs font-semibold bg-white p-2.5 rounded-xl border border-slate-100 flex items-start gap-2.5">
+                        <span className={cn("w-2 h-2 rounded-full mt-1.5 shrink-0 animate-pulse", 
+                          item.level === 'I' ? "bg-red-500" :
+                          item.level === 'II' ? "bg-orange-500" : "bg-amber-500"
+                        )} />
+                        <div>
+                          <span className={cn("text-[9px] font-black tracking-wider uppercase px-1.5 py-0.5 rounded-md",
+                            item.level === 'I' ? "bg-red-50 text-red-700" :
+                            item.level === 'II' ? "bg-orange-50 text-orange-700" : "bg-amber-50 text-amber-700"
+                          )}>
+                            {item.label}
+                          </span>
+                          <p className="text-slate-700 mt-1 leading-relaxed">{item.finding}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Acciones */}
+              <div className="bg-slate-50 px-6 py-4 flex flex-col sm:flex-row gap-2 sm:justify-end border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowFindingsAlert(false);
+                  }}
+                  className="order-2 sm:order-1 px-5 py-2.5 rounded-xl text-slate-600 bg-white hover:bg-slate-150 font-bold text-sm transition-all border border-slate-200 active:scale-95 cursor-pointer"
+                >
+                  Reevaluar Motivos
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFindingsAlertDismissed(true);
+                    setShowFindingsAlert(false);
+                    setStep(4);
+                  }}
+                  className="order-1 sm:order-2 px-5 py-2.5 rounded-xl text-white bg-blue-600 hover:bg-blue-700 font-bold text-sm tracking-wide transition-all shadow-lg shadow-blue-200 active:scale-95 cursor-pointer"
+                >
+                  Confirmar y Avanzar
                 </button>
               </div>
             </motion.div>
