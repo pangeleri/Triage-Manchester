@@ -1558,6 +1558,7 @@ DESTINO SUGERIDO: ${triage.destination}
       <AnimatePresence>
         {showAlertModal && (
           <motion.div
+            key="pediatric-tep-alert-modal"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -1635,6 +1636,7 @@ DESTINO SUGERIDO: ${triage.destination}
 
         {showFindingsAlert && (
           <motion.div
+            key="high-acuity-findings-alert-modal"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
