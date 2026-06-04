@@ -30,15 +30,16 @@ jobs:
             exit 1
           fi
           ls -la dist/
-      - name: 📂 Configurar clave SSH
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          echo "StrictHostKeyChecking no" >> ~/.ssh/config
-          echo "UserKnownHostsFile /dev/null" >> ~/.ssh/config
-      - name: 📂 Sincronizar con Hostinger vía SSH
-        run: |
-          rsync -avzr --delete -e "ssh -i ~/.ssh/id_ed25519 -p 65002" \
-            dist/ \
-            u911641859@147.79.84.184:/home/u911641859/domains/controldesalud.koradigital.net/public_html/
+      - name: 📂 Sincronizar con Hostinger vía FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: ./dist/
+          server-dir: ./
+          protocol: ftps
+          dangerous-clean-slate: false
+          exclude: |
+            **/.env*
+            **/node_modules/**

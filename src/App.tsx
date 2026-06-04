@@ -60,7 +60,7 @@ const INITIAL_VITALS: VitalSigns = {
   diastolicBP: undefined,
   oxygenSaturation: undefined,
   temperature: undefined,
-  glasgow: undefined,
+  glasgow: 15,
   glucose: undefined,
 };
 
@@ -433,22 +433,23 @@ export default function App() {
       };
     } else {
       // Adult Algoritmo
-      const baseAdulto = {
-        heartRate: true,
-        respiratoryRate: true,
-        systolicBP: true,
-        diastolicBP: true,
-        temperature: true,
-      };
       if ([1, 2, 3].includes(levelNum)) {
         return {
-          ...baseAdulto,
+          heartRate: true,
+          respiratoryRate: true,
+          systolicBP: true,
+          diastolicBP: true,
+          temperature: true,
           glasgow: true,
           oxygenSaturation: true,
         };
       }
       return {
-        ...baseAdulto,
+        heartRate: true,
+        respiratoryRate: false,
+        systolicBP: true,
+        diastolicBP: false,
+        temperature: false,
         glasgow: false,
         oxygenSaturation: false,
       };
@@ -533,6 +534,7 @@ export default function App() {
     localStorage.setItem('triage_history', JSON.stringify(updatedHistory));
 
     setPatient(INITIAL_PATIENT);
+    setGcsComponents({ eye: 4, verbal: 5, motor: 6 });
     setStep(1);
     setTepForcedRed(false);
     setShowAlertModal(false);
@@ -1506,6 +1508,7 @@ DESTINO SUGERIDO: ${triage.destination}
             <button 
               onClick={() => {
                 setPatient(INITIAL_PATIENT);
+                setGcsComponents({ eye: 4, verbal: 5, motor: 6 });
                 setStep(1);
                 setTepForcedRed(false);
                 setShowAlertModal(false);
