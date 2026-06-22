@@ -13,6 +13,7 @@ import {
   User, 
   ChevronRight,
   ChevronLeft,
+  ChevronDown,
   Timer,
   RefreshCw,
   Database,
@@ -24,8 +25,8 @@ import { jsPDF } from 'jspdf';
 import { format, differenceInMinutes, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from './lib/utils';
-import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle } from './types';
-import { isSupabaseConfigured, saveTriageRecord, fetchTriageRecords } from './lib/supabase';
+import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle, CLINICAL_SYSTEMS, ClinicalSystem } from './types';
+import { isSupabaseConfigured, saveTriageRecord, fetchTriageRecords, supabase } from './lib/supabase';
 
 // --- Constants & Helpers ---
 
@@ -127,6 +128,153 @@ const getVitalsRange = (ageMonths: number, type: 'FR' | 'FC') => {
   }
 };
 
+// --- CTASMatrix Components and Types ---
+export type CTASLevel = 1 | 2 | 3 | 4 | 5;
+
+export interface ClinicalCriterion {
+  id: string;
+  label: string;
+  level: CTASLevel;
+  selected?: boolean;
+  disabled?: boolean;
+}
+
+export interface CTASMatrixProps {
+  criteria: ClinicalCriterion[];
+  selectedCriterionIds: string[];
+  onToggleCriterion: (criterionId: string) => void;
+}
+
+export const CTASColumnHeader: React.FC<{ level: number; title: string; tone: string }> = ({ level, title, tone }) => {
+  const toneClasses = {
+    resuscitation: "bg-red-100 text-red-900 border border-red-300 shadow-sm",
+    emergent: "bg-orange-100 text-orange-900 border border-orange-300 shadow-sm",
+    urgent: "bg-yellow-100 text-yellow-900 border border-yellow-300 shadow-sm",
+    lessUrgent: "bg-green-100 text-green-900 border border-green-300 shadow-sm",
+    nonUrgent: "bg-blue-100 text-blue-900 border border-blue-300 shadow-sm",
+  }[tone as 'resuscitation' | 'emergent' | 'urgent' | 'lessUrgent' | 'nonUrgent'] || "bg-slate-100 text-slate-800 border border-slate-300 shadow-sm";
+
+  const dotBg = {
+    resuscitation: "bg-red-600 animate-pulse",
+    emergent: "bg-orange-600 animate-pulse",
+    urgent: "bg-yellow-500 animate-pulse",
+    lessUrgent: "bg-green-600 animate-pulse",
+    nonUrgent: "bg-blue-600 animate-pulse",
+  }[tone as 'resuscitation' | 'emergent' | 'urgent' | 'lessUrgent' | 'nonUrgent'] || "bg-slate-500";
+
+
+  return (
+    <div className={cn(
+      "flex h-8 w-full items-center justify-center rounded-lg px-3 text-center text-xs font-semibold uppercase tracking-wider gap-1.5 shrink-0 select-none shadow-sm",
+      toneClasses
+    )}>
+      <span className={cn("w-2 h-2 rounded-full", dotBg)} />
+      {title}
+    </div>
+  );
+};
+
+export const ClinicalCriterionCard: React.FC<{
+  criterion: ClinicalCriterion;
+  selected: boolean;
+  onToggle: () => void;
+}> = ({
+  criterion,
+  selected,
+  onToggle
+}) => {
+  return (
+    <div
+      onClick={onToggle}
+      className={cn(
+        "w-full self-start rounded-xl border p-3 text-left shadow-[0_3px_10px_rgba(15,23,42,0.05)] cursor-pointer select-none transition-all active:scale-[0.98]",
+        selected
+          ? "bg-blue-50 border-blue-600 text-blue-900 ring-1 ring-blue-600 shadow-blue-50/50 scale-[1.01]"
+          : "bg-white border-slate-200/80 text-slate-700 hover:border-slate-350 hover:bg-slate-50/50"
+      )}
+    >
+      <div className="flex w-full items-start gap-3 text-left">
+        <p className="min-w-0 flex-1 text-left text-sm font-medium leading-snug text-slate-800 break-words">
+          {criterion.label}
+        </p>
+        <input 
+          type="checkbox" 
+          checked={selected} 
+          readOnly 
+          className="mt-1 shrink-0 h-4 w-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 accent-blue-600 cursor-pointer" 
+        />
+      </div>
+    </div>
+  );
+};
+
+export const CTASMatrix = ({
+  criteria,
+  selectedCriterionIds,
+  onToggleCriterion
+}: CTASMatrixProps) => {
+  const validCriteria = criteria.filter(
+    (item) =>
+      item &&
+      typeof item.label === "string" &&
+      item.label.trim().length > 0 &&
+      item.label.trim() !== "0" &&
+      item.label.trim() !== "null" &&
+      item.label.trim() !== "undefined" &&
+      [1, 2, 3, 4, 5].includes(item.level)
+  );
+
+  const criteriaByLevel: Record<CTASLevel, ClinicalCriterion[]> = {
+    1: validCriteria.filter((item) => item.level === 1),
+    2: validCriteria.filter((item) => item.level === 2),
+    3: validCriteria.filter((item) => item.level === 3),
+    4: validCriteria.filter((item) => item.level === 4),
+    5: validCriteria.filter((item) => item.level === 5),
+  };
+
+  const ctasColumns = [
+    { level: 1 as CTASLevel, title: "I - RESUCITACIÓN", tone: "resuscitation" },
+    { level: 2 as CTASLevel, title: "II - EMERGENCIA", tone: "emergent" },
+    { level: 3 as CTASLevel, title: "III - URGENTE", tone: "urgent" },
+    { level: 4 as CTASLevel, title: "IV - POCO URGENTE", tone: "lessUrgent" },
+    { level: 5 as CTASLevel, title: "V - NO URGENTE", tone: "nonUrgent" },
+  ] as const;
+
+  return (
+    <section className="w-full">
+      <div className="w-full overflow-x-auto pb-2">
+        <div className="min-w-[1120px]">
+          <div className="grid grid-cols-5 items-start gap-3">
+            {ctasColumns.map((column) => (
+              <div
+                key={column.level}
+                className="flex min-w-0 flex-col items-stretch justify-start gap-3"
+              >
+                <CTASColumnHeader
+                  level={column.level}
+                  title={column.title}
+                  tone={column.tone}
+                />
+
+                <div className="flex flex-col items-stretch justify-start gap-3">
+                  {criteriaByLevel[column.level].map((criterion) => (
+                    <ClinicalCriterionCard
+                      key={criterion.id}
+                      criterion={criterion}
+                      selected={selectedCriterionIds.includes(criterion.id)}
+                      onToggle={() => onToggleCriterion(criterion.id)}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
 // --- Main Component ---
 
 export default function App() {
@@ -143,12 +291,15 @@ export default function App() {
   const [showFindingsAlert, setShowFindingsAlert] = useState(false);
   const [findingsAlertDismissed, setFindingsAlertDismissed] = useState(false);
   const [tepForcedRed, setTepForcedRed] = useState(false);
+  const [selectedSystemId, setSelectedSystemId] = useState('respiratorio');
 
   // Supabase Sync states
   const [dbSaving, setDbSaving] = useState(false);
   const [dbSuccessMessage, setDbSuccessMessage] = useState<string | null>(null);
   const [dbErrorMessage, setDbErrorMessage] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [supabaseConnected, setSupabaseConnected] = useState(false);
 
   // Helper to count altered sides in TEP
   const getTepLadosAlterados = (data: Partial<PatientData>) => {
@@ -207,6 +358,12 @@ export default function App() {
       const syncSupabase = async () => {
         setIsSyncing(true);
         try {
+          if (supabase) {
+            const { error: testErr } = await supabase.from('triage_records').select('id').limit(1);
+            setSupabaseConnected(!testErr);
+          } else {
+            setSupabaseConnected(false);
+          }
           const remoteRecords = await fetchTriageRecords();
           if (remoteRecords && remoteRecords.length > 0) {
             setHistory(remoteRecords);
@@ -215,6 +372,7 @@ export default function App() {
             setTimeout(() => setDbSuccessMessage(null), 5000);
           }
         } catch (e: any) {
+          setSupabaseConnected(false);
           setDbErrorMessage('Error al sincronizar con Supabase: ' + (e?.message || e));
           setTimeout(() => setDbErrorMessage(null), 5000);
         } finally {
@@ -222,25 +380,80 @@ export default function App() {
         }
       };
       syncSupabase();
+    } else {
+      setSupabaseConnected(false);
     }
+  }, []);
+
+  // Monitor network online status and periodic checks for Supabase connection
+  useEffect(() => {
+    const checkSupabase = async () => {
+      if (isSupabaseConfigured && supabase && navigator.onLine) {
+        try {
+          const { error } = await supabase.from('triage_records').select('id').limit(1);
+          setSupabaseConnected(!error);
+        } catch {
+          setSupabaseConnected(false);
+        }
+      } else {
+        setSupabaseConnected(false);
+      }
+    };
+
+    const handleOnline = () => {
+      setIsOnline(true);
+      checkSupabase();
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      setSupabaseConnected(false);
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Initial check on load
+    checkSupabase();
+
+    const interval = setInterval(() => {
+      if (typeof navigator !== 'undefined') {
+        setIsOnline(navigator.onLine);
+      }
+      checkSupabase();
+    }, 20000); // Check every 20 seconds for precise status
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      clearInterval(interval);
+    };
   }, []);
 
   const triggerManualSync = async () => {
     if (!isSupabaseConfigured) {
       setDbErrorMessage('Supabase no está configurado. Revisa la pestaña de Base de Datos para configurarlo.');
       setTimeout(() => setDbErrorMessage(null), 5000);
+      setSupabaseConnected(false);
       return;
     }
     setIsSyncing(true);
     setDbSuccessMessage(null);
     setDbErrorMessage(null);
     try {
+      if (supabase) {
+        const { error: testErr } = await supabase.from('triage_records').select('id').limit(1);
+        setSupabaseConnected(!testErr);
+        if (testErr) {
+          throw new Error(testErr.message);
+        }
+      }
       const remoteRecords = await fetchTriageRecords();
       setHistory(remoteRecords);
       localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
       setDbSuccessMessage('Base de datos sincronizada con éxito.');
       setTimeout(() => setDbSuccessMessage(null), 4000);
     } catch (e: any) {
+      setSupabaseConnected(false);
       setDbErrorMessage('Error de sincronización: ' + (e?.message || e));
       setTimeout(() => setDbErrorMessage(null), 5000);
     } finally {
@@ -579,6 +792,7 @@ export default function App() {
       try {
         const res = await saveTriageRecord(finalPatient);
         if (res.success) {
+          setSupabaseConnected(true);
           setDbSuccessMessage('Registro guardado en Supabase con éxito.');
           // Refresh list to ensure we have structural sync
           const remoteRecords = await fetchTriageRecords();
@@ -586,10 +800,12 @@ export default function App() {
           localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
           setTimeout(() => setDbSuccessMessage(null), 3000);
         } else {
+          setSupabaseConnected(false);
           setDbErrorMessage('No se pudo guardar en Supabase: ' + res.error);
           setTimeout(() => setDbErrorMessage(null), 6000);
         }
       } catch (err: any) {
+        setSupabaseConnected(false);
         setDbErrorMessage('Excepción de Supabase: ' + (err?.message || err));
         setTimeout(() => setDbErrorMessage(null), 6000);
       } finally {
@@ -715,9 +931,9 @@ DESTINO SUGERIDO: ${triage.destination}
   };
 
   return (
-    <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto">
+    <div className="min-h-screen w-full max-w-none m-0 p-4 md:p-6 lg:p-8">
       {/* Header */}
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 bg-white p-6 rounded-2xl border border-slate-200/60 shadow-[0_12px_30px_rgba(15,23,42,0.12),0_3px_8px_rgba(15,23,42,0.05)]">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-blue-600 rounded-xl text-white">
             <Activity size={32} />
@@ -727,7 +943,7 @@ DESTINO SUGERIDO: ${triage.destination}
             <p className="text-slate-500 font-medium">Hospital Gral. de Agudos "Dra. Cecilia Grierson"</p>
           </div>
         </div>
-        <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border border-slate-200">
+        <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border border-slate-200/80">
           <Clock className="text-blue-600" size={20} />
           <span className="font-mono font-bold text-slate-700">
             {format(currentTime, 'HH:mm:ss')}
@@ -735,11 +951,13 @@ DESTINO SUGERIDO: ${triage.destination}
         </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_440px] gap-8 items-start w-full">
         {/* Main Form Area */}
-        <main className="lg:col-span-2">
-          <div className="bg-white rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100">
-            {renderStepIndicator()}
+        <main className="w-full min-w-0 max-w-none">
+          <div className="bg-white rounded-[24px] border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.10)]">
+            <div className="w-full flex justify-center pt-8">
+              {renderStepIndicator()}
+            </div>
 
             <div className="p-8 pt-0">
               <AnimatePresence mode="wait">
@@ -751,27 +969,29 @@ DESTINO SUGERIDO: ${triage.destination}
                     exit={{ opacity: 0, x: -20 }}
                     className="space-y-6"
                   >
-                    <div className="flex items-center gap-2 text-blue-600 mb-4">
-                      <User size={24} />
-                      <h2 className="text-xl font-bold">Identificación del Paciente <span className="text-red-500">*</span></h2>
+                    <div className="flex items-center gap-2 text-blue-600 mb-6 font-sans">
+                      <User size={28} />
+                      <h2 className="text-2xl font-black tracking-tight">Identificación del Paciente <span className="text-red-500">*</span></h2>
                     </div>
 
                     <div className="grid grid-cols-1 gap-6">
                       <div className="space-y-2">
-                        <label className="text-sm font-semibold text-slate-700">Tipo de Paciente <span className="text-red-500">*</span></label>
+                        <label className="text-base font-black text-slate-800 flex items-center gap-1.5">
+                          Tipo de Paciente <span className="text-red-500 font-extrabold">*</span>
+                        </label>
                         <div className="flex gap-4">
                           {[
-                            { value: 'adult', label: 'Adulto', icon: <User size={18} /> },
-                            { value: 'pediatric', label: 'Pediátrico', icon: <User size={18} /> }
+                            { value: 'adult', label: 'Adulto', icon: <User size={22} /> },
+                            { value: 'pediatric', label: 'Pediátrico / Infantil', icon: <User size={22} /> }
                           ].map(t => (
                             <button
                               key={t.value}
                               type="button"
                               onClick={() => setPatient({...patient, type: t.value as any})}
                               className={cn(
-                                "flex-1 py-4 rounded-xl border font-bold transition-all flex flex-col items-center gap-2 cursor-pointer",
+                                "flex-1 py-5 rounded-2xl border-2 font-black text-base md:text-lg transition-all flex flex-col items-center gap-2.5 cursor-pointer shadow-sm",
                                 patient.type === t.value 
-                                  ? "bg-blue-600 border-blue-600 text-white shadow-md opacity-100" 
+                                  ? "bg-blue-600 border-blue-600 text-white shadow-lg opacity-100 scale-[1.01]" 
                                   : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 opacity-80"
                               )}
                             >
@@ -785,20 +1005,20 @@ DESTINO SUGERIDO: ${triage.destination}
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <div className="space-y-2">
-                        <label className="text-sm font-semibold text-slate-700">Nombre Completo <span className="text-red-500">*</span></label>
+                        <label className="text-base font-black text-slate-800">Nombre Completo <span className="text-red-500 font-extrabold">*</span></label>
                         <input 
                           type="text" 
-                          className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                          className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400"
                           placeholder="Ej. Juan Pérez"
                           value={patient.name}
                           onChange={e => setPatient({...patient, name: e.target.value})}
                         />
                       </div>
                       <div className="space-y-2">
-                        <label className="text-sm font-semibold text-slate-700">Documento (DNI/CI) <span className="text-red-500">*</span></label>
+                        <label className="text-base font-black text-slate-800">Documento (DNI/CI) <span className="text-red-500 font-extrabold">*</span></label>
                         <input 
                           type="text" 
-                          className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                          className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400"
                           placeholder="Ej. 12345678"
                           value={patient.documentId}
                           onChange={e => {
@@ -809,11 +1029,11 @@ DESTINO SUGERIDO: ${triage.destination}
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
-                          <label className="text-sm font-semibold text-slate-700">Edad <span className="text-red-500">*</span></label>
+                          <label className="text-base font-black text-slate-800">Edad <span className="text-red-500 font-extrabold">*</span></label>
                           <input 
                             type="number" 
-                            className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
-                            placeholder="---"
+                            className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400"
+                            placeholder="Ej. 35"
                             value={patient.age ?? ''}
                             onChange={e => {
                               const val = e.target.value ? parseInt(e.target.value) : undefined;
@@ -830,9 +1050,9 @@ DESTINO SUGERIDO: ${triage.destination}
                           />
                         </div>
                         <div className="space-y-2">
-                          <label className="text-sm font-semibold text-slate-700">Unidad</label>
+                          <label className="text-base font-black text-slate-800">Unidad</label>
                           <select 
-                            className="w-full p-3 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                            className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-bold text-slate-800 bg-white shadow-sm cursor-pointer"
                             value={patient.ageUnit}
                             onChange={e => {
                               const unit = e.target.value as any;
@@ -852,19 +1072,17 @@ DESTINO SUGERIDO: ${triage.destination}
                           </select>
                         </div>
                       </div>
-                      <p className="text-[10px] text-slate-400 mt-1">
-                        * El tipo de paciente se selecciona automáticamente según la edad (más de 18 años = Adulto).
-                      </p>
                       <div className="space-y-2">
-                        <label className="text-sm font-semibold text-slate-700">Género</label>
+                        <label className="text-base font-black text-slate-800">Género</label>
                         <div className="flex gap-4">
                           {['M', 'F'].map(g => (
                             <button
                               key={g}
+                              type="button"
                               onClick={() => setPatient({...patient, gender: g as any})}
                               className={cn(
-                                "flex-1 py-3 rounded-xl border font-bold transition-all",
-                                patient.gender === g ? "bg-blue-600 border-blue-600 text-white shadow-md" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                                "flex-1 py-4 rounded-xl border-2 font-black text-base transition-all cursor-pointer shadow-sm",
+                                patient.gender === g ? "bg-blue-600 border-blue-600 text-white shadow-md scale-[1.01]" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
                               )}
                             >
                               {g === 'M' ? 'Masculino' : 'Femenino'}
@@ -873,6 +1091,9 @@ DESTINO SUGERIDO: ${triage.destination}
                         </div>
                       </div>
                     </div>
+                    <p className="text-xs font-bold text-slate-400 mt-2">
+                      * El tipo de paciente se selecciona automáticamente según la edad (más de 18 años = Adulto).
+                    </p>
                   </motion.div>
                 )}
 
@@ -884,17 +1105,17 @@ DESTINO SUGERIDO: ${triage.destination}
                     exit={{ opacity: 0, x: -20 }}
                     className="space-y-6"
                   >
-                    <div className="flex items-center justify-between gap-2 mb-4">
-                      <div className="flex items-center gap-2 text-blue-600">
-                        <Stethoscope size={24} />
-                        <h2 className="text-xl font-bold">Triángulo de Evaluación Pediátrico (TEP)</h2>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                      <div className="flex items-center gap-2.5 text-blue-600">
+                        <Stethoscope size={28} />
+                        <h2 className="text-2xl font-black tracking-tight">Triángulo de Evaluación Pediátrico (TEP)</h2>
                       </div>
-                      <span className="text-[10px] bg-blue-50 text-blue-600 px-3 py-1 rounded-full font-bold">
+                      <span className="text-xs bg-blue-100 text-blue-800 px-3.5 py-1.5 rounded-full font-black uppercase tracking-wider shrink-0 self-start sm:self-auto">
                         Obligatorio para pediatría
                       </span>
                     </div>
 
-                    <p className="text-sm text-slate-500">
+                    <p className="text-base text-slate-600 font-medium leading-relaxed">
                       Por favor, evalúe las 3 componentes del triángulo. Seleccione si está <b>estable</b> o marque los síntomas <b>anormales</b> correspondientes:
                     </p>
 
@@ -928,29 +1149,29 @@ DESTINO SUGERIDO: ${triage.destination}
                         const hasSelected = Object.values((patient.tep as any)[section.key]).some(v => v);
                         return (
                           <div key={section.title} className={cn(
-                            "p-4 rounded-2xl border transition-all",
-                            hasSelected ? "bg-slate-50 border-blue-200" : "bg-white border-dashed border-slate-300"
+                            "p-5 rounded-2xl border-2 transition-all shadow-sm",
+                            hasSelected ? "bg-slate-50/80 border-blue-400 shadow-md shadow-slate-100" : "bg-white border-dashed border-slate-300"
                           )}>
-                            <div className="flex justify-between items-center mb-3 border-b border-slate-300 pb-2">
-                              <h3 className="font-bold text-slate-800">{section.title}</h3>
+                            <div className="flex justify-between items-center mb-4 border-b border-slate-350 pb-2.5">
+                              <h3 className="font-sans font-black text-slate-900 text-lg sm:text-[19px] tracking-tight">{section.title}</h3>
                               {hasSelected ? (
-                                <span className="text-[10px] text-green-600 bg-green-50 px-2 py-0.5 rounded-full font-bold">Evaluado</span>
+                                <span className="text-xs text-green-700 bg-green-100 px-2.5 py-1 rounded-full font-black uppercase tracking-wider font-mono">Evaluado</span>
                               ) : (
-                                <span className="text-[10px] text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full font-bold">Pendiente *</span>
+                                <span className="text-xs text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full font-black uppercase tracking-wider font-mono">Pendiente *</span>
                               )}
                             </div>
-                            <div className="space-y-2">
+                            <div className="space-y-2.5">
                               {section.options.map(opt => {
                                 const isChecked = !!(patient.tep as any)[section.key][opt.k];
                                 return (
                                   <label key={opt.k} className={cn(
-                                    "flex items-center gap-2 text-sm cursor-pointer p-2 rounded-lg transition-colors hover:bg-slate-100",
-                                    opt.k === 'normal' && isChecked && "bg-green-50 text-green-800 font-medium hover:bg-green-100",
-                                    opt.k !== 'normal' && isChecked && "bg-red-50 text-red-800 font-medium hover:bg-red-100"
+                                    "flex items-center gap-3 text-[15px] cursor-pointer p-2.5 rounded-xl transition-all hover:bg-slate-100/90 border border-transparent select-none",
+                                    opt.k === 'normal' && isChecked && "bg-green-100/70 text-green-900 border-green-200 font-bold hover:bg-green-100",
+                                    opt.k !== 'normal' && isChecked && "bg-red-100/70 text-red-950 border-red-205 font-bold hover:bg-red-100"
                                   )}>
                                     <input 
                                       type="checkbox" 
-                                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                                      className="w-5 h-5 rounded-md border-slate-450 text-blue-600 focus:ring-blue-500 cursor-pointer"
                                       checked={isChecked}
                                       onChange={() => {
                                         const nextTep = { ...patient.tep! };
@@ -982,7 +1203,7 @@ DESTINO SUGERIDO: ${triage.destination}
                                         setPatient(tempPatient);
                                       }}
                                     />
-                                    {opt.l}
+                                    <span className="leading-tight font-sans text-[14px] sm:text-[15px] font-semibold tracking-tight">{opt.l}</span>
                                   </label>
                                 );
                               })}
@@ -994,83 +1215,97 @@ DESTINO SUGERIDO: ${triage.destination}
                   </motion.div>
                 )}
 
-                {step === 3 && (
-                  <motion.div
-                    key="step3"
-                    initial={{ opacity: 0, x: 20 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    className="space-y-6"
-                  >
-                    <div className="flex items-center gap-2 text-blue-600 mb-4">
-                      <Stethoscope size={24} />
-                      <h2 className="text-xl font-bold">Motivo de Consulta / Problema Principal <span className="text-red-500">*</span></h2>
-                    </div>
-                    
-                    <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-slate-200">
-                      {(['LEVEL_I', 'LEVEL_II', 'LEVEL_III', 'LEVEL_IV', 'LEVEL_V'] as const).map(levelKey => {
-                        const levelDisplay = levelKey.split('_')[1];
-                        return (
-                          <div key={levelKey} className="space-y-2">
-                            <h3 className={cn(
-                              "text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full inline-block",
-                              levelDisplay === 'I' ? "bg-red-600 text-white" : 
-                              levelDisplay === 'II' ? "bg-orange-500 text-white" :
-                              levelDisplay === 'III' ? "bg-yellow-500 text-white" :
-                              levelDisplay === 'IV' ? "bg-green-500 text-white" :
-                              "bg-blue-500 text-white"
-                            )}>
-                              Nivel {levelDisplay}
-                            </h3>
-                            <div className="grid grid-cols-1 gap-2">
-                              {FINDINGS[levelKey].map(f => {
-                                const isSelected = patient.findings?.includes(f);
-                                return (
-                                  <label
-                                    key={f}
-                                    className={cn(
-                                      "flex items-center gap-3 p-3 rounded-xl border cursor-pointer transition-all",
-                                      isSelected 
-                                        ? "bg-blue-50 border-blue-500 ring-1 ring-blue-500 text-blue-800 shadow-sm" 
-                                        : "bg-white border-slate-200 text-slate-600 hover:border-slate-300"
-                                    )}
-                                  >
-                                    <input 
-                                      type="checkbox"
-                                      className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                                      checked={isSelected}
-                                      onChange={() => {
-                                        const current = patient.findings || [];
-                                        const next = isSelected 
-                                          ? current.filter(item => item !== f)
-                                          : [...current, f];
-                                        setPatient({...patient, findings: next});
-                                      }}
-                                    />
-                                    <span className="text-xs font-semibold leading-tight">{f}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
+                {step === 3 && (() => {
+                  const currentSystem = CLINICAL_SYSTEMS.find(sys => sys.id === selectedSystemId) || CLINICAL_SYSTEMS[0];
+                  
+                  const criteria: ClinicalCriterion[] = [
+                    ...currentSystem.matrix.I.map(label => ({ id: label, label, level: 1 as CTASLevel })),
+                    ...currentSystem.matrix.II.map(label => ({ id: label, label, level: 2 as CTASLevel })),
+                    ...currentSystem.matrix.III.map(label => ({ id: label, label, level: 3 as CTASLevel })),
+                    ...currentSystem.matrix.IV.map(label => ({ id: label, label, level: 4 as CTASLevel })),
+                    ...currentSystem.matrix.V.map(label => ({ id: label, label, level: 5 as CTASLevel })),
+                  ];
 
+                  const onToggleCriterion = (criterionId: string) => {
+                    const current = patient.findings || [];
+                    const isSelected = current.includes(criterionId);
+                    const next = isSelected 
+                      ? current.filter(f => f !== criterionId)
+                      : [...current, criterionId];
+                    setPatient({ ...patient, findings: next });
+                  };
+
+                  return (
+                    <motion.div
+                      key="step3"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      className="space-y-6"
+                    >
+                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-2">
+                        <div className="flex items-center gap-2 text-blue-600">
+                          <Stethoscope size={28} />
+                          <h2 className="text-2xl font-black tracking-tight">Motivo de Consulta / Problema Principal <span className="text-red-500">*</span></h2>
+                        </div>
+                        <span className="text-xs font-black uppercase tracking-wider bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200 shrink-0 self-start md:self-auto">
+                          Matriz CTAS/CEDIS Interactiva
+                        </span>
+                      </div>
+
+                      {/* Selector de Sistemas Clínicos para el Problema Principal - LISTA DESPLEGABLE */}
+                      <div className="space-y-2 max-w-sm">
+                        <label htmlFor="clinical-system-select" className="text-xs font-black uppercase tracking-widest text-slate-450 block">
+                          Seleccionar Sistema Clínico CTAS:
+                        </label>
+                        <div className="relative">
+                          <select
+                            id="clinical-system-select"
+                            value={selectedSystemId}
+                            onChange={(e) => setSelectedSystemId(e.target.value)}
+                            className="w-full bg-white text-slate-850 border border-slate-200 hover:border-slate-300 rounded-xl px-4 py-3 text-base font-black shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer pr-10"
+                          >
+                            {CLINICAL_SYSTEMS.map(sys => (
+                              <option key={sys.id} value={sys.id}>
+                                {sys.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+                            <ChevronDown size={18} />
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Matriz Completa y Ajustada a la Pantalla */}
+                      <div className="space-y-3">
+                        <span className="text-xs font-black uppercase tracking-widest text-slate-500 block">
+                          Matriz de Discriminación de Motivos de Consulta:
+                        </span>
+                        
+                        <CTASMatrix
+                          criteria={criteria}
+                          selectedCriterionIds={patient.findings || []}
+                          onToggleCriterion={onToggleCriterion}
+                        />
+                      </div>
+
+                      {/* Observaciones adicionales */}
                       <div className="space-y-2 pt-4 border-t border-slate-100">
-                        <label className="text-sm font-bold text-slate-700 flex items-center gap-2">
-                          <Plus size={16} className="text-blue-600" />
-                          Otros Síntomas / Observaciones
+                        <label className="text-base font-black text-slate-800 flex items-center gap-2">
+                          <Plus size={18} className="text-blue-600" />
+                          Otros Síntomas / Observaciones Opcionales
                         </label>
                         <textarea 
-                          className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-[80px] text-sm"
-                          placeholder="Escriba aquí otros síntomas o detalles relevantes..."
-                          value={patient.otherSymptoms}
+                          className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-[90px] text-base font-semibold text-slate-800 placeholder:text-slate-400 shadow-sm"
+                          placeholder="Escriba aquí otros síntomas o detalles opcionales..."
+                          value={patient.otherSymptoms || ''}
                           onChange={e => setPatient({...patient, otherSymptoms: e.target.value})}
                         />
                       </div>
-                    </div>
-                  </motion.div>
-                )}
+                    </motion.div>
+                  );
+                })()}
 
                 {step === 4 && (
                   <motion.div
@@ -1080,12 +1315,12 @@ DESTINO SUGERIDO: ${triage.destination}
                     exit={{ opacity: 0, x: -20 }}
                     className="space-y-6"
                   >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
-                      <div className="flex items-center gap-2 text-blue-600">
-                        <Heart size={24} />
-                        <h2 className="text-xl font-bold">Signos Vitales / Constantes</h2>
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+                      <div className="flex items-center gap-2.5 text-blue-600">
+                        <Heart size={28} />
+                        <h2 className="text-2xl font-black tracking-tight">Signos Vitales / Constantes</h2>
                       </div>
-                      <span className="text-xs font-semibold bg-slate-100 text-slate-500 px-3 py-1 rounded-lg border border-slate-200">
+                      <span className="text-xs font-black bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-205 shrink-0 self-start sm:self-auto">
                         Campos con <span className="text-red-500 font-bold">*</span> son obligatorios
                       </span>
                     </div>
@@ -1095,23 +1330,23 @@ DESTINO SUGERIDO: ${triage.destination}
                       {(() => {
                         const reqs = getVitalsRequirements();
                         return [
-                          { key: 'heartRate', label: 'FC (lpm)', icon: <Activity size={16} /> },
-                          { key: 'respiratoryRate', label: 'FR (rpm)', icon: <Timer size={16} /> },
-                          { key: 'systolicBP', label: 'PAS (mmHg)', icon: <Activity size={16} /> },
-                          { key: 'diastolicBP', label: 'PAD (mmHg)', icon: <Activity size={16} /> },
-                          { key: 'oxygenSaturation', label: 'SpO2 (%)', icon: <Info size={16} /> },
-                          { key: 'temperature', label: 'T° (°C)', icon: <Stethoscope size={16} /> },
+                          { key: 'heartRate', label: 'FC (lpm)', icon: <Activity size={18} /> },
+                          { key: 'respiratoryRate', label: 'FR (rpm)', icon: <Timer size={18} /> },
+                          { key: 'systolicBP', label: 'PAS (mmHg)', icon: <Activity size={18} /> },
+                          { key: 'diastolicBP', label: 'PAD (mmHg)', icon: <Activity size={18} /> },
+                          { key: 'oxygenSaturation', label: 'SpO2 (%)', icon: <Info size={18} /> },
+                          { key: 'temperature', label: 'T° (°C)', icon: <Stethoscope size={18} /> },
                         ].map(v => {
                           const isRequired = reqs[v.key as keyof typeof reqs];
                           return (
                             <div key={v.key} className="space-y-2 relative">
-                              <label className="text-xs font-bold text-slate-500 flex items-center gap-1 uppercase">
-                                {v.icon} {v.label} {isRequired ? <span className="text-red-500 font-black">*</span> : <span className="text-slate-400 font-medium text-[10px] lowercase">(opcional)</span>}
+                              <label className="text-xs md:text-sm font-black text-slate-600 flex items-center gap-1.5 uppercase tracking-wide">
+                                {v.icon} {v.label} {isRequired ? <span className="text-red-500 font-black">*</span> : <span className="text-slate-400 font-medium text-[11px] lowercase">(opcional)</span>}
                               </label>
                               <input 
                                 type="number" 
                                 step={v.key === 'temperature' ? 0.1 : 1}
-                                className="w-full p-2.5 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none text-sm font-semibold text-slate-800"
+                                className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-base font-bold text-slate-800 shadow-sm placeholder:text-slate-400"
                                 placeholder={isRequired ? "---" : "--- (Opcional)"}
                                 value={patient.vitals![v.key as keyof VitalSigns] ?? ''}
                                 onChange={e => {
@@ -1129,16 +1364,16 @@ DESTINO SUGERIDO: ${triage.destination}
                     </div>
 
                     {/* Escala de Coma de Glasgow Separada y Profesional */}
-                    <div className="mt-8 border border-slate-200/95 rounded-3xl bg-white p-5 space-y-6">
+                    <div className="mt-8 border border-slate-200/80 rounded-3xl bg-white p-6 space-y-6 shadow-sm">
                       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
                         <div className="space-y-1">
                           <div className="flex items-center gap-2">
-                            <FileText size={18} className="text-blue-600" />
-                            <h3 className="font-bold text-slate-800 text-base flex items-center gap-1">
-                              Escala de Coma de Glasgow {getVitalsRequirements().glasgow ? <span className="text-red-500">*</span> : <span className="text-slate-400 font-normal text-xs lowercase">(opcional)</span>}
+                            <FileText size={20} className="text-blue-600" />
+                            <h3 className="font-extrabold text-slate-900 text-lg sm:text-xl flex items-center gap-1">
+                              Escala de Coma de Glasgow {getVitalsRequirements().glasgow ? <span className="text-red-500">*</span> : <span className="text-slate-400 font-normal text-sm lowercase">(opcional)</span>}
                             </h3>
                           </div>
-                          <p className="text-xs text-slate-500">
+                          <p className="text-sm text-slate-600 font-medium leading-relaxed">
                             Evalúe la función neurológica mediante el registro interactivo de cada parámetro por separado.
                           </p>
                         </div>
@@ -1146,7 +1381,7 @@ DESTINO SUGERIDO: ${triage.destination}
                         {/* Puntaje Total Destacado */}
                         <div className="flex flex-wrap items-center gap-3">
                           <div className={cn(
-                            "flex items-center gap-2 px-4 py-2 rounded-2xl border font-bold text-xs sm:text-sm transition-colors",
+                            "flex items-center gap-2 px-5 py-2.5 rounded-2xl border-2 font-bold text-sm sm:text-base transition-all shadow-sm",
                             patient.vitals?.glasgow === 15 
                               ? "bg-green-50 text-green-700 border-green-200" 
                               : patient.vitals?.glasgow && patient.vitals.glasgow >= 13 
@@ -1158,10 +1393,10 @@ DESTINO SUGERIDO: ${triage.destination}
                               : "bg-slate-50 text-slate-400 border-slate-200"
                           )}>
                             <span>Puntaje GCS:</span>
-                            <span className="text-lg font-black bg-white/60 px-2.5 py-0.5 rounded-lg border border-black/5">
+                            <span className="text-xl font-black bg-white/60 px-3 py-1 rounded-xl border border-black/5 shadow-inner">
                               {patient.vitals?.glasgow !== undefined ? `${patient.vitals.glasgow}/15` : '---'}
                             </span>
-                            <span className="hidden sm:inline-block font-semibold">
+                            <span className="hidden sm:inline-block font-bold">
                               {patient.vitals?.glasgow === 15 
                                 ? "Normal / Alerta" 
                                 : patient.vitals?.glasgow && patient.vitals.glasgow >= 13 
@@ -1180,14 +1415,13 @@ DESTINO SUGERIDO: ${triage.destination}
 
                       {/* 3 Columnas por separado: Ocular, Verbal, Motor */}
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        
                         {/* APERTURA OCULAR */}
-                        <div className="space-y-3 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
-                          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700">Apertura Ocular</span>
-                            <span className="text-[10px] bg-slate-200 text-slate-600 font-extrabold px-2 py-0.5 rounded-full">Max 4</span>
+                        <div className="space-y-4 bg-slate-50/50 p-6 rounded-2xl border border-slate-200/60 shadow-[0_4px_14px_rgba(15,23,42,0.06)]">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
+                            <h3 className="text-lg font-semibold text-slate-800 tracking-tight">Apertura Ocular</h3>
+                            <span className="text-xs bg-slate-100 text-slate-600 font-extrabold px-3 py-1 rounded-full border border-slate-200/60">Max 4</span>
                           </div>
-                          <div className="space-y-2">
+                          <div className="space-y-2.5">
                             {GCS_OPTIONS.eye.map(o => {
                               const isSelected = patient.vitals?.glasgow !== undefined && gcsComponents.eye === o.value;
                               return (
@@ -1206,15 +1440,15 @@ DESTINO SUGERIDO: ${triage.destination}
                                     });
                                   }}
                                   className={cn(
-                                    "w-full text-left px-3 py-3 rounded-xl border text-xs transition-all flex items-center justify-between group cursor-pointer",
+                                    "w-full text-left px-4 py-3.5 rounded-xl border text-sm leading-relaxed transition-all flex items-center justify-between group cursor-pointer shadow-sm select-none",
                                     isSelected 
-                                      ? "bg-blue-600 text-white border-blue-600 font-bold shadow-md scale-[1.02]" 
-                                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+                                      ? "bg-blue-600 text-white border-2 border-blue-600 font-extrabold shadow-md scale-[1.01]" 
+                                      : "bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50 hover:border-slate-350"
                                   )}
                                 >
-                                  <span className="leading-snug pr-2 font-medium">{o.label}</span>
+                                  <span className="leading-tight pr-2 font-semibold">{o.label}</span>
                                   <span className={cn(
-                                    "text-xs px-2 py-0.5 rounded font-black shrink-0",
+                                    "text-xs md:text-sm px-2.5 py-0.5 rounded font-black shrink-0",
                                     isSelected ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-500"
                                   )}>
                                     {o.value}
@@ -1226,12 +1460,12 @@ DESTINO SUGERIDO: ${triage.destination}
                         </div>
 
                         {/* RESPUESTA VERBAL */}
-                        <div className="space-y-3 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
-                          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700">Respuesta Verbal</span>
-                            <span className="text-[10px] bg-slate-200 text-slate-600 font-extrabold px-2 py-0.5 rounded-full">Max 5</span>
+                        <div className="space-y-4 bg-slate-50/50 p-6 rounded-2xl border border-slate-200/60 shadow-[0_4px_14px_rgba(15,23,42,0.06)]">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
+                            <h3 className="text-lg font-semibold text-slate-800 tracking-tight">Respuesta Verbal</h3>
+                            <span className="text-xs bg-slate-100 text-slate-600 font-extrabold px-3 py-1 rounded-full border border-slate-200/60">Max 5</span>
                           </div>
-                          <div className="space-y-2">
+                          <div className="space-y-2.5">
                             {GCS_OPTIONS.verbal.map(o => {
                               const isSelected = patient.vitals?.glasgow !== undefined && gcsComponents.verbal === o.value;
                               return (
@@ -1250,15 +1484,15 @@ DESTINO SUGERIDO: ${triage.destination}
                                     });
                                   }}
                                   className={cn(
-                                    "w-full text-left px-3 py-3 rounded-xl border text-xs transition-all flex items-center justify-between group cursor-pointer",
+                                    "w-full text-left px-4 py-3.5 rounded-xl border text-sm leading-relaxed transition-all flex items-center justify-between group cursor-pointer shadow-sm select-none",
                                     isSelected 
-                                      ? "bg-blue-600 text-white border-blue-600 font-bold shadow-md scale-[1.02]" 
-                                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+                                      ? "bg-blue-600 text-white border-2 border-blue-600 font-extrabold shadow-md scale-[1.01]" 
+                                      : "bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50 hover:border-slate-350"
                                   )}
                                 >
-                                  <span className="leading-snug pr-2 font-medium">{o.label}</span>
+                                  <span className="leading-tight pr-2 font-semibold">{o.label}</span>
                                   <span className={cn(
-                                    "text-xs px-2 py-0.5 rounded font-black shrink-0",
+                                    "text-xs md:text-sm px-2.5 py-0.5 rounded font-black shrink-0",
                                     isSelected ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-500"
                                   )}>
                                     {o.value}
@@ -1270,12 +1504,12 @@ DESTINO SUGERIDO: ${triage.destination}
                         </div>
 
                         {/* RESPUESTA MOTORA */}
-                        <div className="space-y-3 bg-slate-50/50 p-4 rounded-2xl border border-slate-100">
-                          <div className="flex items-center justify-between border-b border-slate-200 pb-2">
-                            <span className="text-xs font-extrabold uppercase tracking-wider text-slate-700">Respuesta Motora</span>
-                            <span className="text-[10px] bg-slate-200 text-slate-600 font-extrabold px-2 py-0.5 rounded-full">Max 6</span>
+                        <div className="space-y-4 bg-slate-50/50 p-6 rounded-2xl border border-slate-200/60 shadow-[0_4px_14px_rgba(15,23,42,0.06)]">
+                          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
+                            <h3 className="text-lg font-semibold text-slate-800 tracking-tight">Respuesta Motora</h3>
+                            <span className="text-xs bg-slate-100 text-slate-600 font-extrabold px-3 py-1 rounded-full border border-slate-200/60">Max 6</span>
                           </div>
-                          <div className="space-y-2">
+                          <div className="space-y-2.5">
                             {GCS_OPTIONS.motor.map(o => {
                               const isSelected = patient.vitals?.glasgow !== undefined && gcsComponents.motor === o.value;
                               return (
@@ -1294,15 +1528,15 @@ DESTINO SUGERIDO: ${triage.destination}
                                     });
                                   }}
                                   className={cn(
-                                    "w-full text-left px-3 py-3 rounded-xl border text-xs transition-all flex items-center justify-between group cursor-pointer",
+                                    "w-full text-left px-4 py-3.5 rounded-xl border text-sm leading-relaxed transition-all flex items-center justify-between group cursor-pointer shadow-sm select-none",
                                     isSelected 
-                                      ? "bg-blue-600 text-white border-blue-600 font-bold shadow-md scale-[1.02]" 
-                                      : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
+                                      ? "bg-blue-600 text-white border-2 border-blue-600 font-extrabold shadow-md scale-[1.01]" 
+                                      : "bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50 hover:border-slate-350"
                                   )}
                                 >
-                                  <span className="leading-snug pr-2 font-medium">{o.label}</span>
+                                  <span className="leading-tight pr-2 font-semibold">{o.label}</span>
                                   <span className={cn(
-                                    "text-xs px-2 py-0.5 rounded font-black shrink-0",
+                                    "text-xs md:text-sm px-2.5 py-0.5 rounded font-black shrink-0",
                                     isSelected ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-500"
                                   )}>
                                     {o.value}
@@ -1327,17 +1561,17 @@ DESTINO SUGERIDO: ${triage.destination}
                   >
                     <div className="inline-flex flex-col items-center">
                       <div className={cn(
-                        "w-32 h-32 rounded-full flex items-center justify-center mb-4 shadow-2xl animate-pulse",
-                        currentTriage.level === 'I' ? "bg-red-600" :
-                        currentTriage.level === 'II' ? "bg-orange-500" :
+                        "w-36 h-36 rounded-full flex items-center justify-center mb-4 shadow-2xl animate-pulse border-4 border-white",
+                        currentTriage.level === 'I' ? "bg-red-600 text-white" :
+                        currentTriage.level === 'II' ? "bg-orange-500 text-white" :
                         currentTriage.level === 'III' ? "bg-yellow-400 text-slate-900" :
-                        currentTriage.level === 'IV' ? "bg-green-500" :
-                        "bg-blue-500"
+                        currentTriage.level === 'IV' ? "bg-green-500 text-white" :
+                        "bg-blue-500 text-white"
                       )}>
-                        <span className="text-6xl font-black">{currentTriage.level}</span>
+                        <span className="text-7xl font-black">{currentTriage.level}</span>
                       </div>
                       <h2 className={cn(
-                        "text-3xl font-black mb-2",
+                        "text-4xl font-black mb-3 tracking-tight",
                         currentTriage.level === 'I' ? "text-red-600" :
                         currentTriage.level === 'II' ? "text-orange-600" :
                         currentTriage.level === 'III' ? "text-yellow-600" :
@@ -1348,31 +1582,31 @@ DESTINO SUGERIDO: ${triage.destination}
                       </h2>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-md mx-auto">
-                      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                        <p className="text-xs font-bold text-slate-400 uppercase mb-1">Tiempo de Atención</p>
-                        <p className="text-lg font-black text-slate-800">{currentTriage.wait}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full max-w-3xl mx-auto">
+                      <div className="bg-slate-50/80 p-5 rounded-2xl border border-slate-200/70 shadow-sm">
+                        <p className="text-sm font-black text-slate-500 uppercase mb-1.5 tracking-wider">Tiempo de Atención</p>
+                        <p className="text-xl font-black text-slate-800">{currentTriage.wait}</p>
                       </div>
-                      <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                        <p className="text-xs font-bold text-slate-400 uppercase mb-1">Destino Sugerido</p>
-                        <p className="text-lg font-black text-slate-800">{currentTriage.destination}</p>
+                      <div className="bg-slate-50/80 p-5 rounded-2xl border border-slate-200/70 shadow-sm">
+                        <p className="text-sm font-black text-slate-500 uppercase mb-1.5 tracking-wider">Destino Sugerido</p>
+                        <p className="text-xl font-black text-slate-800">{currentTriage.destination}</p>
                       </div>
                     </div>
 
-                    <div className="bg-slate-900 text-white p-6 rounded-3xl text-left space-y-4">
-                      <div className="flex items-center justify-between">
-                        <h3 className="font-bold flex items-center gap-2">
-                          <FileText size={18} className="text-blue-400" />
+                    <div className="bg-slate-900 text-white p-6 rounded-[24px] border border-slate-800 text-left space-y-4 shadow-xl">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                        <h3 className="font-extrabold text-base flex items-center gap-2 text-white">
+                          <FileText size={20} className="text-blue-400" />
                           Resumen para HC Electrónica
                         </h3>
                         <button 
                           onClick={() => navigator.clipboard.writeText(getSummaryText(patient as PatientData))}
-                          className="text-xs bg-slate-800 hover:bg-slate-700 px-3 py-1 rounded-full transition-colors"
+                          className="text-xs md:text-sm bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-xl transition-all font-bold tracking-wide cursor-pointer text-slate-100 uppercase border border-slate-700"
                         >
                           Copiar Texto
                         </button>
                       </div>
-                      <pre className="text-[12px] font-sans text-slate-300 whitespace-pre-wrap bg-slate-800/50 p-4 rounded-xl border border-slate-700">
+                      <pre className="text-xs md:text-sm font-mono text-slate-900 whitespace-pre-wrap bg-white p-5 rounded-2xl border border-slate-700 leading-relaxed max-h-[300px] overflow-y-auto shadow-inner">
                         {getSummaryText(patient as PatientData)}
                       </pre>
                     </div>
@@ -1381,13 +1615,13 @@ DESTINO SUGERIDO: ${triage.destination}
               </AnimatePresence>
 
               {/* Navigation Buttons */}
-              <div className="flex justify-between mt-12 pt-8 border-t border-slate-100">
+              <div className="flex justify-between mt-12 pt-8 border-t border-slate-150">
                 {step > 1 && step < 5 && (
                   <button 
                     onClick={handleBack}
-                    className="flex items-center gap-2 px-6 py-3 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-all"
+                    className="flex items-center gap-2 px-7 py-3.5 rounded-xl font-black text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-all text-base border-2 border-transparent active:border-slate-250 cursor-pointer"
                   >
-                    <ChevronLeft size={20} /> Atrás
+                    <ChevronLeft size={22} /> Atrás
                   </button>
                 )}
                 <div className="flex-1" />
@@ -1395,23 +1629,23 @@ DESTINO SUGERIDO: ${triage.destination}
                   <button 
                     onClick={handleNext}
                     disabled={!isStepValid()}
-                    className="flex items-center gap-2 bg-blue-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-blue-200 hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center gap-2 bg-blue-600 text-white px-10 py-3.5 rounded-xl font-black text-base shadow-xl shadow-blue-200/70 hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed select-none cursor-pointer"
                   >
-                    Siguiente <ChevronRight size={20} />
+                    Siguiente <ChevronRight size={22} />
                   </button>
                 ) : (
                   <div className="flex gap-4">
                     <button 
                       onClick={() => setStep(1)}
-                      className="px-6 py-3 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition-all"
+                      className="px-7 py-3.5 rounded-xl font-black text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-all text-base cursor-pointer"
                     >
-                      Editar
+                      Editar Formularios
                     </button>
                     <button 
                       onClick={finalizeTriage}
-                      className="flex items-center gap-2 bg-green-600 text-white px-8 py-3 rounded-xl font-bold shadow-lg shadow-green-200 hover:bg-green-700 transition-all"
+                      className="flex items-center gap-2 bg-green-600 text-white px-10 py-3.5 rounded-xl font-black text-base shadow-xl shadow-green-200 hover:bg-green-700 transition-all cursor-pointer"
                     >
-                      Finalizar Registro <CheckCircle2 size={20} />
+                      Finalizar Registro <CheckCircle2 size={22} />
                     </button>
                   </div>
                 )}
@@ -1421,7 +1655,7 @@ DESTINO SUGERIDO: ${triage.destination}
         </main>
 
         {/* Sidebar: History & Timers */}
-        <aside className="space-y-6 w-full lg:max-w-[340px]">
+        <aside className="space-y-6 w-full lg:sticky lg:top-[24px] lg:self-start">
           {/* Sync Status Notifications inside Sidebar */}
           {dbSuccessMessage && (
             <motion.div 
@@ -1445,14 +1679,178 @@ DESTINO SUGERIDO: ${triage.destination}
             </motion.div>
           )}
 
+          {/* Real-time Triage Gravity Level Monitor */}
+          <div className="bg-white p-8 rounded-[24px] border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.10)] space-y-5">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+              <h3 className="font-mono font-black flex items-center justify-between gap-2.5 text-sm sm:text-base uppercase tracking-widest text-slate-500 w-full">
+                <span className="flex items-center gap-2">
+                  <Activity size={20} className="text-blue-600 animate-pulse" />
+                  Nivel de Gravedad
+                </span>
+                <span className="flex items-center gap-1.5 shrink-0">
+                  <span className={cn(
+                    "w-2.5 h-2.5 rounded-full shadow-[0_0_8px_currentColor] transition-all duration-500",
+                    isOnline && supabaseConnected 
+                      ? "bg-emerald-500 text-emerald-500 animate-pulse" 
+                      : "bg-rose-500 text-rose-500"
+                  )} 
+                  title={isOnline && supabaseConnected ? "Conectado a Hosting y Supabase" : "Desconectado o Supabase sin configurar"}
+                  />
+                  <span className={cn(
+                    "text-[10px] font-black uppercase tracking-wider font-sans",
+                    isOnline && supabaseConnected ? "text-emerald-600" : "text-rose-500"
+                  )}>
+                    {isOnline && supabaseConnected ? 'Conectado' : 'Offline'}
+                  </span>
+                </span>
+              </h3>
+            </div>
+            {(() => {
+              const currentLevel = currentTriage.level; // I, II, III, IV, V
+              const levelsInfo: Record<TriageLevel, { bg: string; text: string; name: string; wait: string; complement: string; desc: string }> = {
+                'I': { 
+                  bg: 'bg-red-50/95 border border-red-200/60 text-red-600 shadow-sm', 
+                  text: 'text-red-700', 
+                  name: 'Nivel I · Resucitación', 
+                  wait: 'Atención inmediata',
+                  complement: 'Reevaluación continua',
+                  desc: 'Riesgo vital inminente. Requiere abordaje inmediato en Shock Room.'
+                },
+                'II': { 
+                  bg: 'bg-orange-50/95 border border-orange-200/60 text-orange-600 shadow-sm', 
+                  text: 'text-orange-750', 
+                  name: 'Nivel II · Emergencia', 
+                  wait: 'Tiempo de espera: ≤ 15 minutos',
+                  complement: 'Reevaluación cada 15 minutos',
+                  desc: 'Inestabilidad hemodinámica sospechada o potencial. Box de Emergencias.'
+                },
+                'III': { 
+                  bg: 'bg-yellow-50/60 border border-yellow-200/60 text-yellow-850 shadow-sm', 
+                  text: 'text-yellow-800', 
+                  name: 'Nivel III · Urgente', 
+                  wait: 'Tiempo de espera: ≤ 30 minutos',
+                  complement: 'Reevaluación cada 30 minutos',
+                  desc: 'Condición aguda estable con riesgo potencial. Consultorio de Urgencias.'
+                },
+                'IV': { 
+                  bg: 'bg-green-50/80 border border-green-200/60 text-green-750 shadow-sm', 
+                  text: 'text-green-700', 
+                  name: 'Nivel IV · Menos Urgente', 
+                  wait: 'Tiempo de espera: ≤ 60 minutos',
+                  complement: 'Reevaluación cada 60 minutos',
+                  desc: 'Condiciones médicas generales estables. Consultorio General.'
+                },
+                'V': { 
+                  bg: 'bg-blue-50/80 border border-blue-200/60 text-blue-700 shadow-sm', 
+                  text: 'text-blue-600', 
+                  name: 'Nivel V · No Urgente', 
+                  wait: 'Tiempo de espera: ≤ 120 minutos',
+                  complement: 'Reevaluación cada 120 minutos',
+                  desc: 'Consulta ambulatoria de baja complejidad. Consulta Externa / Admisión.'
+                }
+              };
+
+              const active = levelsInfo[currentLevel] || levelsInfo['V'];
+              const urgencyAnimation = 
+                currentLevel === 'I' 
+                  ? 'animate-ctas-critical' 
+                  : currentLevel === 'II' 
+                  ? 'animate-ctas-emergent' 
+                  : '';
+
+              return (
+                <div className="space-y-5">
+                  {/* Real-time Giant Indicator */}
+                  <div className={cn(
+                    "p-5 rounded-[20px] border flex items-center gap-4 transition-all duration-350 shadow-sm", 
+                    active.bg,
+                    urgencyAnimation
+                  )}>
+                    <div className="w-20 h-20 rounded-full border-3 border-current flex items-center justify-center font-black text-4xl font-mono shrink-0 select-none shadow-md bg-white">
+                      {currentLevel}
+                    </div>
+                    <div className="min-w-0 flex-1 space-y-1 text-left">
+                      <div className="text-[10px] uppercase tracking-wide font-medium text-slate-500">
+                        CLASIFICACIÓN ACTUAL
+                      </div>
+                      <h4 className="text-base leading-snug font-semibold text-slate-900 whitespace-normal break-words">
+                        {active.name}
+                      </h4>
+                      <div className={cn("text-sm leading-snug font-medium flex items-center gap-1.5", active.text)}>
+                        <Clock size={14} className="shrink-0" />
+                        <span>{active.wait}</span>
+                      </div>
+                      <div className="text-xs leading-relaxed text-slate-600">
+                        {active.complement}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Level dots representing the scale of gravity CTAS */}
+                  <div className="space-y-3">
+                    <div className="text-xs font-black uppercase tracking-wider text-slate-500">Progreso / Escala CTAS:</div>
+                    <div className="relative">
+                      {/* Bar back */}
+                      <div className="absolute top-[14px] left-3 right-3 h-0.5 bg-slate-100 -z-10" />
+                      <div className="grid grid-cols-5 gap-1.5 z-10 relative">
+                        {(['I', 'II', 'III', 'IV', 'V'] as const).map((lvl) => {
+                          const isActive = lvl === currentLevel;
+                          const dotColor = lvl === 'I' ? 'bg-red-500 text-white animate-pulse' : lvl === 'II' ? 'bg-orange-500 text-white animate-pulse' : lvl === 'III' ? 'bg-yellow-500 text-slate-900' : lvl === 'IV' ? 'bg-green-500 text-white' : 'bg-blue-500 text-white';
+                          return (
+                            <div key={lvl} className="flex flex-col items-center">
+                              <div className={cn(
+                                "w-7 h-7 rounded-full flex items-center justify-center font-black text-xs font-mono transition-all",
+                                isActive 
+                                  ? `${dotColor} scale-110 shadow-lg ring-4 ring-slate-150`
+                                  : "bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
+                              )}>
+                                {lvl}
+                              </div>
+                              <span className={cn("text-[9px] sm:text-[10px] mt-1.5 font-black leading-tight", isActive ? "text-slate-800" : "text-slate-400")}>
+                                {lvl === 'I' ? 'Resuc.' : lvl === 'II' ? 'Emerg.' : lvl === 'III' ? 'Urgent.' : lvl === 'IV' ? 'P.Urg.' : 'No Urg.'}
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Description Box */}
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm text-slate-600 leading-relaxed font-semibold">
+                    {active.desc}
+                  </div>
+                </div>
+              );
+            })()}
+
+            <button 
+              onClick={() => {
+                setPatient(INITIAL_PATIENT);
+                setGcsComponents({ eye: 4, verbal: 5, motor: 6 });
+                setStep(1);
+                setTepForcedRed(false);
+                setShowAlertModal(false);
+                setShowFindingsAlert(false);
+                setFindingsAlertDismissed(false);
+              }}
+              className="w-full mt-4 py-3 bg-slate-700 hover:bg-slate-800 text-white rounded-xl text-base font-black transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-95"
+            >
+              <Plus size={18} /> Nuevo Triaje
+            </button>
+          </div>
+
           {/* Pacientes en Espera */}
-          <div className="bg-white p-6 rounded-3xl shadow-xl shadow-slate-200/50 border border-slate-100 space-y-4">
-            <div className="flex justify-between items-center">
-              <h2 className="text-[17px] font-bold flex items-center gap-2 text-slate-800">
-                <Timer size={18} className="text-blue-600" />
+          <div className="bg-white p-8 rounded-[24px] border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.10)] space-y-5">
+            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+              <h2 className="text-[19px] sm:text-2xl font-black flex items-center gap-2.5 text-slate-950">
+                <Timer size={24} className="text-blue-600" />
                 <span>Pacientes en Espera</span>
                 {isSupabaseConfigured && (
-                  <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse ml-1" title="Conectado a Supabase" />
+                  <span className={cn(
+                    "w-2.5 h-2.5 rounded-full ml-1 transition-colors duration-500",
+                    isOnline && supabaseConnected ? "bg-emerald-500 animate-pulse text-emerald-500" : "bg-rose-500 text-rose-500"
+                  )} title={isOnline && supabaseConnected ? "Conectado a Supabase" : "Desconectado de Supabase"} />
                 )}
               </h2>
               {isSupabaseConfigured && (
@@ -1460,17 +1858,17 @@ DESTINO SUGERIDO: ${triage.destination}
                   onClick={triggerManualSync}
                   disabled={isSyncing}
                   title="Sincronizar base de datos remota"
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-slate-50 transition-colors disabled:opacity-50 cursor-pointer"
+                  className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-colors disabled:opacity-50 cursor-pointer"
                 >
-                  <RefreshCw size={14} className={cn(isSyncing && "animate-spin")} />
+                  <RefreshCw size={15} className={cn(isSyncing && "animate-spin")} />
                 </button>
               )}
             </div>
 
-            <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
+            <div className="space-y-4 max-h-[460px] overflow-y-auto pr-1">
               {history.length === 0 ? (
                 <div className="text-center py-10 text-slate-400">
-                  <p className="text-sm italic">No hay pacientes registrados</p>
+                  <p className="text-sm italic font-medium">No hay pacientes registrados</p>
                 </div>
               ) : (
                 history.map(p => {
@@ -1483,13 +1881,15 @@ DESTINO SUGERIDO: ${triage.destination}
 
                   return (
                     <div key={p.id} className={cn(
-                      "p-4 rounded-2xl border transition-all",
-                      isAlert ? "bg-red-50 border-red-200 animate-pulse" : "bg-slate-50 border-slate-100"
+                       "p-5 rounded-2xl border transition-all shadow-sm",
+                       isAlert 
+                         ? "bg-red-50 border-red-300 animate-pulse text-red-950" 
+                         : "bg-slate-50/80 border-slate-200 hover:border-slate-300"
                     )}>
-                      <div className="flex justify-between items-start mb-2">
+                      <div className="flex justify-between items-center mb-2.5">
                         <span className={cn(
-                          "text-[10px] font-black px-2 py-0.5 rounded-full text-white",
-                          p.triageLevel === 'I' ? "bg-red-600" :
+                          "text-[10px] sm:text-xs font-black px-2.5 py-1 rounded-full text-white shadow-sm uppercase tracking-wide",
+                          p.triageLevel === 'I' ? "bg-red-650" :
                           p.triageLevel === 'II' ? "bg-orange-500" :
                           p.triageLevel === 'III' ? "bg-yellow-500 text-slate-900" :
                           p.triageLevel === 'IV' ? "bg-green-600" :
@@ -1497,23 +1897,23 @@ DESTINO SUGERIDO: ${triage.destination}
                         )}>
                           NIVEL {p.triageLevel}
                         </span>
-                        <span className="text-[10px] font-mono text-slate-400">{p.id}</span>
+                        <span className="text-[10px] sm:text-xs font-mono font-bold text-slate-400">{p.id}</span>
                       </div>
-                      <p className="font-bold text-slate-800 truncate text-[14px]">{p.name}</p>
-                      <div className="flex items-center justify-between mt-3 text-xs">
-                        <div className="flex items-center gap-1 text-slate-500">
-                          <Clock size={12} />
-                          <span className="font-bold">
+                      <p className="font-extrabold text-slate-900 truncate text-base sm:text-lg">{p.name}</p>
+                      <div className="flex items-center justify-between mt-3 text-xs md:text-sm">
+                        <div className={cn("flex items-center gap-1.5 font-bold text-sm", isAlert ? "text-red-700 animate-pulse" : "text-slate-600")}>
+                          <Clock size={16} className={isAlert ? "text-red-600" : "text-slate-450"} />
+                          <span>
                             {hoursIn}h {minutesIn % 60}m
                           </span>
                         </div>
                         <div className="flex gap-2">
                           <button 
                             onClick={() => generatePDF(p)}
-                            className="p-1.5 bg-white rounded-lg border border-slate-200 text-slate-600 hover:text-blue-600 transition-colors cursor-pointer"
+                            className="p-2 bg-white rounded-xl border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer"
                             title="Descargar PDF"
                           >
-                            <Download size={13} />
+                            <Download size={15} />
                           </button>
                         </div>
                       </div>
@@ -1522,35 +1922,6 @@ DESTINO SUGERIDO: ${triage.destination}
                 })
               )}
             </div>
-          </div>
-
-          {/* Quick manual / info block */}
-          <div className="bg-slate-900 p-6 rounded-3xl text-white shadow-xl shadow-slate-200/50">
-            <h3 className="font-bold mb-2 flex items-center gap-2">
-              <Info size={18} className="text-blue-400" />
-              Manual CTAS / Canadiense
-            </h3>
-            <p className="text-[10px] text-slate-400 leading-relaxed">
-              Este sistema implementa la escala CTAS de 5 niveles:
-              1. Nivel I (Resucitación) - Crítico
-              2. Nivel II (Emergencia) - 15 min
-              3. Nivel III (Urgente) - 30 min
-              4. Nivel IV/V (Observación)
-            </p>
-            <button 
-              onClick={() => {
-                setPatient(INITIAL_PATIENT);
-                setGcsComponents({ eye: 4, verbal: 5, motor: 6 });
-                setStep(1);
-                setTepForcedRed(false);
-                setShowAlertModal(false);
-                setShowFindingsAlert(false);
-                setFindingsAlertDismissed(false);
-              }}
-              className="w-full mt-4 py-2 bg-white/20 hover:bg-white/30 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Plus size={16} /> Nuevo Triaje
-            </button>
           </div>
         </aside>
       </div>
