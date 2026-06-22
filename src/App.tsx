@@ -933,7 +933,7 @@ DESTINO SUGERIDO: ${triage.destination}
   return (
     <div className="min-h-screen w-full max-w-none m-0 p-4 md:p-6 lg:p-8">
       {/* Header */}
-      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 bg-white p-6 rounded-2xl border border-slate-200/60 shadow-[0_12px_30px_rgba(15,23,42,0.12),0_3px_8px_rgba(15,23,42,0.05)]">
+      <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 bg-white px-6 py-4 rounded-2xl border border-slate-200/60 shadow-[0_18px_40px_rgba(15,23,42,0.14),0_6px_14px_rgba(15,23,42,0.06)]">
         <div className="flex items-center gap-4">
           <div className="p-3 bg-blue-600 rounded-xl text-white">
             <Activity size={32} />
@@ -943,7 +943,7 @@ DESTINO SUGERIDO: ${triage.destination}
             <p className="text-slate-500 font-medium">Hospital Gral. de Agudos "Dra. Cecilia Grierson"</p>
           </div>
         </div>
-        <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border border-slate-200/80">
+        <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border border-slate-200/70">
           <Clock className="text-blue-600" size={20} />
           <span className="font-mono font-bold text-slate-700">
             {format(currentTime, 'HH:mm:ss')}
@@ -951,7 +951,7 @@ DESTINO SUGERIDO: ${triage.destination}
         </div>
       </header>
 
-      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_440px] gap-8 items-start w-full">
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(0,0.88fr)_minmax(500px,0.32fr)] w-full">
         {/* Main Form Area */}
         <main className="w-full min-w-0 max-w-none">
           <div className="bg-white rounded-[24px] border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.10)]">
@@ -1841,14 +1841,14 @@ DESTINO SUGERIDO: ${triage.destination}
           </div>
 
           {/* Pacientes en Espera */}
-          <div className="bg-white p-8 rounded-[24px] border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.10)] space-y-5">
+          <div className="w-full min-w-0 bg-white p-5 rounded-2xl border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.10)] space-y-4">
             <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-              <h2 className="text-[19px] sm:text-2xl font-black flex items-center gap-2.5 text-slate-950">
-                <Timer size={24} className="text-blue-600" />
+              <h2 className="text-base sm:text-lg font-bold flex items-center gap-2 text-slate-950">
+                <Timer size={20} className="text-blue-600" />
                 <span>Pacientes en Espera</span>
                 {isSupabaseConfigured && (
                   <span className={cn(
-                    "w-2.5 h-2.5 rounded-full ml-1 transition-colors duration-500",
+                    "w-2 h-2 rounded-full ml-1 transition-colors duration-500",
                     isOnline && supabaseConnected ? "bg-emerald-500 animate-pulse text-emerald-500" : "bg-rose-500 text-rose-500"
                   )} title={isOnline && supabaseConnected ? "Conectado a Supabase" : "Desconectado de Supabase"} />
                 )}
@@ -1858,14 +1858,14 @@ DESTINO SUGERIDO: ${triage.destination}
                   onClick={triggerManualSync}
                   disabled={isSyncing}
                   title="Sincronizar base de datos remota"
-                  className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-colors disabled:opacity-50 cursor-pointer"
+                  className="p-1 px-2 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-slate-50 transition-colors disabled:opacity-50 cursor-pointer"
                 >
-                  <RefreshCw size={15} className={cn(isSyncing && "animate-spin")} />
+                  <RefreshCw size={14} className={cn(isSyncing && "animate-spin")} />
                 </button>
               )}
             </div>
 
-            <div className="space-y-4 max-h-[460px] overflow-y-auto pr-1">
+            <div className="mt-3 max-h-[520px] xl:max-h-[560px] overflow-y-auto pr-1 flex flex-col gap-2">
               {history.length === 0 ? (
                 <div className="text-center py-10 text-slate-400">
                   <p className="text-sm italic font-medium">No hay pacientes registrados</p>
@@ -1880,40 +1880,62 @@ DESTINO SUGERIDO: ${triage.destination}
                                   (p.triageLevel === 'III' && hoursIn >= 12);
 
                   return (
-                    <div key={p.id} className={cn(
-                       "p-5 rounded-2xl border transition-all shadow-sm",
-                       isAlert 
-                         ? "bg-red-50 border-red-300 animate-pulse text-red-950" 
-                         : "bg-slate-50/80 border-slate-200 hover:border-slate-300"
-                    )}>
-                      <div className="flex justify-between items-center mb-2.5">
-                        <span className={cn(
-                          "text-[10px] sm:text-xs font-black px-2.5 py-1 rounded-full text-white shadow-sm uppercase tracking-wide",
-                          p.triageLevel === 'I' ? "bg-red-650" :
-                          p.triageLevel === 'II' ? "bg-orange-500" :
-                          p.triageLevel === 'III' ? "bg-yellow-500 text-slate-900" :
-                          p.triageLevel === 'IV' ? "bg-green-600" :
-                          "bg-blue-600"
-                        )}>
-                          NIVEL {p.triageLevel}
-                        </span>
-                        <span className="text-[10px] sm:text-xs font-mono font-bold text-slate-400">{p.id}</span>
+                    <div 
+                      key={p.id} 
+                      className={cn(
+                        "w-full rounded-xl border px-3 py-2.5 shadow-[0_3px_10px_rgba(15,23,42,0.05)] transition-all",
+                        isAlert 
+                          ? "bg-red-50 border-red-300 animate-pulse text-red-950" 
+                          : "bg-slate-50/80 border-slate-200/70 hover:border-slate-350"
+                      )}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1 space-y-1.5 text-left">
+                          {/* Badge CTAS */}
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={cn(
+                              "text-[10px] font-semibold px-2 py-0.5 rounded-full text-white shadow-xs uppercase tracking-wide shrink-0",
+                              p.triageLevel === 'I' ? "bg-red-650" :
+                              p.triageLevel === 'II' ? "bg-orange-500" :
+                              p.triageLevel === 'III' ? "bg-yellow-500 text-slate-900" :
+                              p.triageLevel === 'IV' ? "bg-green-600" :
+                              "bg-blue-600"
+                            )}>
+                              NIVEL {p.triageLevel}
+                            </span>
+                          </div>
+
+                          {/* Nombre */}
+                          <p className="text-base font-semibold leading-tight text-slate-900 truncate" title={p.name}>
+                            {p.name}
+                          </p>
+                        </div>
+
+                        {/* Identificador / ID */}
+                        <div className="shrink-0 text-right">
+                          <span className="text-xs font-medium text-slate-400 font-mono">{p.id}</span>
+                        </div>
                       </div>
-                      <p className="font-extrabold text-slate-900 truncate text-base sm:text-lg">{p.name}</p>
-                      <div className="flex items-center justify-between mt-3 text-xs md:text-sm">
-                        <div className={cn("flex items-center gap-1.5 font-bold text-sm", isAlert ? "text-red-700 animate-pulse" : "text-slate-600")}>
-                          <Clock size={16} className={isAlert ? "text-red-600" : "text-slate-450"} />
-                          <span>
+
+                      {/* Bottom Row: tiempo y boton descarga */}
+                      <div className="mt-2 flex items-center justify-between gap-2">
+                        <div className={cn(
+                          "flex items-center gap-1 text-sm leading-none font-medium", 
+                          isAlert ? "text-red-750 animate-pulse font-semibold" : "text-slate-550"
+                        )}>
+                          <Clock size={13} className={isAlert ? "text-red-600 shrink-0" : "text-slate-440 shrink-0"} />
+                          <span className="leading-none">
                             {hoursIn}h {minutesIn % 60}m
                           </span>
                         </div>
-                        <div className="flex gap-2">
+
+                        <div className="flex gap-1 shrink-0">
                           <button 
                             onClick={() => generatePDF(p)}
-                            className="p-2 bg-white rounded-xl border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-300 hover:shadow-sm transition-all cursor-pointer"
+                            className="p-1 px-1.5 bg-white hover:bg-slate-50 rounded-lg border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-300 transition-all cursor-pointer"
                             title="Descargar PDF"
                           >
-                            <Download size={15} />
+                            <Download size={13} />
                           </button>
                         </div>
                       </div>
