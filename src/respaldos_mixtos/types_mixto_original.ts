@@ -9,14 +9,9 @@ export interface VitalSigns {
   temperature?: number;
   glasgow?: number;
   glucose?: number;
-  painScale?: string;
-  painScore?: number;
-  avdi?: string;
-  condicionMedicionSpo2?: string;
-  metodoTemperatura?: string;
 }
 
-export type PatientType = 'pediatric';
+export type PatientType = 'adult' | 'pediatric';
 
 export interface PediatricTriangle {
   appearance: {
@@ -45,39 +40,6 @@ export interface PediatricTriangle {
   };
 }
 
-export type EstadoOperativo = 
-  | 'preliminar_critico' 
-  | 'en_espera' 
-  | 'llamado' 
-  | 'en_atencion' 
-  | 'derivado' 
-  | 'cancelado' 
-  | 'finalizado';
-
-export interface ReevaluacionData {
-  id?: string;
-  episodioId: string;
-  nivelCtasPrevio: number;
-  nivelCtasPosterior: number;
-  motivoCambio: string;
-  observaciones: string;
-  proximaReevaluacion?: string;
-  
-  // Signos vitales de reevaluación
-  frecuenciaCardiaca?: number;
-  frecuenciaRespiratoria?: number;
-  temperatura?: number;
-  saturacionOxigeno?: number;
-  glucemia?: number;
-  tensionArterialSistolica?: number;
-  tensionArterialDiastolica?: number;
-  avdi?: string;
-  puntajeDolor?: number;
-  motivoNoObtencion?: string;
-  
-  fechaCreacion?: string;
-}
-
 export interface PatientData {
   id: string;
   name: string;
@@ -88,35 +50,13 @@ export interface PatientData {
   arrivalDate: string;
   type: PatientType;
   tep?: PediatricTriangle;
-  tepStates?: {
-    apariencia: 'no_evaluado' | 'normal' | 'alterado' | 'no_valorable';
-    respiracion: 'no_evaluado' | 'normal' | 'alterado' | 'no_valorable';
-    circulacion: 'no_evaluado' | 'normal' | 'alterado' | 'no_valorable';
-  };
   vitals: VitalSigns;
-  frecuenciaCardiacaDs?: string;
-  frecuenciaRespiratoriaDs?: string;
   findings: string[];
   otherSymptoms: string;
   triageLevel: TriageLevel;
   originalPriority: string;
   waitTime: string;
   suggestedDestination: string;
-  
-  // Datos del acompañante
-  nombreAcompanante?: string;
-  telefonoAcompanante?: string;
-  parentescoAcompanante?: string;
-  
-  // Tiempos objetivos y de reevaluación
-  estadoOperativo: EstadoOperativo;
-  nivelCtasSugerido: number;
-  nivelCtasFinal: number;
-  objetivoEvaluacionMinutos?: number;
-  fechaObjetivoEvaluacion?: string;
-  motivoNoObtencion?: string;
-  
-  reevaluaciones?: ReevaluacionData[];
 }
 
 export interface ClinicalMatrixItem {

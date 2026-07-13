@@ -11,30 +11,23 @@ import {
   Plus, 
   Stethoscope, 
   User, 
-  ChevronRight, 
-  ChevronLeft, 
-  ChevronDown, 
-  Timer, 
-  RefreshCw, 
-  Database, 
-  Github, 
-  Globe, 
-  FileSpreadsheet,
-  ShieldAlert,
-  Edit3,
-  Trash2,
-  Check,
-  AlertTriangle,
-  ShieldCheck
+  ChevronRight,
+  ChevronLeft,
+  ChevronDown,
+  Timer,
+  RefreshCw,
+  Database,
+  Github,
+  Globe,
+  FileSpreadsheet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import { format, differenceInMinutes, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from './lib/utils';
-import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle, CLINICAL_SYSTEMS, ClinicalSystem, ReevaluacionData, EstadoOperativo } from './types';
-import { isSupabaseConfigured, saveTriageRecord, fetchTriageRecords, saveReevaluation, updateOperationalState, supabase } from './lib/supabase';
-import { getVitalsRange, getVitalsDSLabel, getTepLadosAlterados, getTepLadosList, getVitalsRequirementsByLevel, calculateTriage } from './lib/clinicalUtils';
+import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle, CLINICAL_SYSTEMS, ClinicalSystem } from './types';
+import { isSupabaseConfigured, saveTriageRecord, fetchTriageRecords, supabase } from './lib/supabase';
 
 // --- Constants & Helpers ---
 
@@ -71,11 +64,6 @@ const INITIAL_VITALS: VitalSigns = {
   temperature: undefined,
   glasgow: 15,
   glucose: undefined,
-  painScale: 'EVA',
-  painScore: 0,
-  avdi: 'A',
-  condicionMedicionSpo2: 'aire_ambiente',
-  metodoTemperatura: 'axilar',
 };
 
 const INITIAL_TEP: PediatricTriangle = {
@@ -111,22 +99,34 @@ const INITIAL_PATIENT: Partial<PatientData> = {
   ageUnit: 'años',
   gender: 'M',
   documentId: '',
-  type: 'pediatric',
+  type: 'adult',
   tep: INITIAL_TEP,
-  tepStates: {
-    apariencia: 'no_evaluado',
-    respiracion: 'no_evaluado',
-    circulacion: 'no_evaluado',
-  },
   vitals: INITIAL_VITALS,
   findings: [],
   otherSymptoms: '',
-  estadoOperativo: 'en_espera',
-  nivelCtasSugerido: 5,
-  nivelCtasFinal: 5,
-  nombreAcompanante: '',
-  telefonoAcompanante: '',
-  parentescoAcompanante: '',
+};
+
+// Simplified Physiological Constants for Pediatric (Based on screenshots)
+// Range logic: normal, +/- 1DS, +/- 2DS
+const getVitalsRange = (ageMonths: number, type: 'FR' | 'FC') => {
+  // Simplified ranges based on provided table
+  if (type === 'FR') {
+    if (ageMonths <= 3) return { normal: [30, 60], d1: [60, 70], d2: [70, 80] };
+    if (ageMonths <= 6) return { normal: [30, 60], d1: [60, 70], d2: [70, 80] };
+    if (ageMonths <= 12) return { normal: [25, 45], d1: [45, 55], d2: [55, 60] };
+    if (ageMonths <= 36) return { normal: [20, 30], d1: [30, 35], d2: [35, 40] };
+    if (ageMonths <= 72) return { normal: [16, 24], d1: [24, 28], d2: [28, 32] };
+    if (ageMonths <= 120) return { normal: [14, 20], d1: [20, 24], d2: [24, 26] };
+    return { normal: [14, 20], d1: [20, 24], d2: [24, 26] };
+  } else {
+    if (ageMonths <= 3) return { normal: [90, 180], d1: [180, 205], d2: [205, 230] };
+    if (ageMonths <= 6) return { normal: [80, 160], d1: [160, 180], d2: [180, 210] };
+    if (ageMonths <= 12) return { normal: [80, 140], d1: [140, 160], d2: [160, 180] };
+    if (ageMonths <= 36) return { normal: [75, 130], d1: [130, 145], d2: [145, 165] };
+    if (ageMonths <= 72) return { normal: [70, 110], d1: [110, 125], d2: [125, 140] };
+    if (ageMonths <= 120) return { normal: [60, 90], d1: [90, 105], d2: [105, 120] };
+    return { normal: [60, 90], d1: [90, 105], d2: [105, 120] };
+  }
 };
 
 // --- CTASMatrix Components and Types ---
@@ -361,14 +361,9 @@ export default function App() {
         try {
           if (supabase) {
             const { error: testErr } = await supabase.from('triage_records').select('id').limit(1);
-            if (testErr) {
-              setSupabaseConnected(false);
-              throw new Error(testErr.message || 'Error de conexión');
-            }
-            setSupabaseConnected(true);
+            setSupabaseConnected(!testErr);
           } else {
             setSupabaseConnected(false);
-            throw new Error('Supabase no está instanciado.');
           }
           const remoteRecords = await fetchTriageRecords();
           if (remoteRecords && remoteRecords.length > 0) {
@@ -379,7 +374,6 @@ export default function App() {
           }
         } catch (e: any) {
           setSupabaseConnected(false);
-          console.warn('Error al sincronizar con Supabase:', e?.message || e);
           setDbErrorMessage('Error al sincronizar con Supabase: ' + (e?.message || e));
           setTimeout(() => setDbErrorMessage(null), 5000);
         } finally {
@@ -449,24 +443,18 @@ export default function App() {
     try {
       if (supabase) {
         const { error: testErr } = await supabase.from('triage_records').select('id').limit(1);
+        setSupabaseConnected(!testErr);
         if (testErr) {
-          setSupabaseConnected(false);
-          throw new Error(testErr.message || 'Error de conexión');
+          throw new Error(testErr.message);
         }
-        setSupabaseConnected(true);
-      } else {
-        throw new Error('Supabase no está instanciado.');
       }
       const remoteRecords = await fetchTriageRecords();
-      if (remoteRecords && remoteRecords.length > 0) {
-        setHistory(remoteRecords);
-        localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
-      }
+      setHistory(remoteRecords);
+      localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
       setDbSuccessMessage('Base de datos sincronizada con éxito.');
       setTimeout(() => setDbSuccessMessage(null), 4000);
     } catch (e: any) {
       setSupabaseConnected(false);
-      console.warn('Error de sincronización manual con Supabase:', e?.message || e);
       setDbErrorMessage('Error de sincronización: ' + (e?.message || e));
       setTimeout(() => setDbErrorMessage(null), 5000);
     } finally {
@@ -476,23 +464,241 @@ export default function App() {
 
   // --- Logic Functions ---
 
-  const currentTriage = useMemo(() => calculateTriage(patient, tepForcedRed), [patient, tepForcedRed]);
+  const calculateTriage = (data: Partial<PatientData>): { level: TriageLevel; priority: string; wait: string; destination: string } => {
+    const v = data.vitals || INITIAL_VITALS;
+    const ageMonths = (data.age || 0) * (data.ageUnit === 'años' ? 12 : 1);
+    
+    // Evaluate potential acuity levels (1 to 5) and choose the most acute one (lowest index, i.e., I).
+    let suggestedLevelValue = 5;
+
+    // --- 1. TEP (Triángulo de Evaluación Pediátrica) Modifier ---
+    if (data.type === 'pediatric' && data.tep) {
+      if (tepForcedRed) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else {
+        const { appearance, respiration, circulation } = data.tep;
+        const appHasAnormal = Object.entries(appearance).some(([k, v]) => k !== 'normal' && v);
+        const respHasAnormal = Object.entries(respiration).some(([k, v]) => k !== 'normal' && v);
+        const circHasAnormal = Object.entries(circulation).some(([k, v]) => k !== 'normal' && v);
+        const ladosAlt = [appHasAnormal, respHasAnormal, circHasAnormal].filter(Boolean).length;
+
+        if (appearance.unresponsive || ladosAlt >= 3) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (ladosAlt === 2) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (ladosAlt === 1) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+    }
+
+    // --- 2. Glasgow Coma Scale (GCS) Modifier ---
+    if (v.glasgow !== undefined) {
+      if (v.glasgow <= 9) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.glasgow >= 10 && v.glasgow <= 13) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.glasgow === 14) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    }
+
+    // --- 3. Oxygen Saturation Modifier ---
+    if (v.oxygenSaturation !== undefined) {
+      if (v.oxygenSaturation < 90) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.oxygenSaturation >= 90 && v.oxygenSaturation <= 92) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.oxygenSaturation >= 93 && v.oxygenSaturation <= 94) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    }
+
+    // --- 4. Hemodynamics & Vital Signs Modifiers by age ---
+    if (data.type === 'pediatric') {
+      const frRange = getVitalsRange(ageMonths, 'FR');
+      const fcRange = getVitalsRange(ageMonths, 'FC');
+
+      // Respiratory Rate (Pediatric)
+      if (v.respiratoryRate !== undefined) {
+        if (v.respiratoryRate > frRange.d2[1] * 1.2 || v.respiratoryRate < frRange.normal[0] * 0.4) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.respiratoryRate > frRange.d2[1] || v.respiratoryRate < frRange.normal[0] * 0.6) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.respiratoryRate > frRange.d1[1] || v.respiratoryRate < frRange.normal[0]) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+
+      // Heart Rate (Pediatric)
+      if (v.heartRate !== undefined) {
+        if (v.heartRate > fcRange.d2[1] * 1.3 || v.heartRate < fcRange.normal[0] * 0.4) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.heartRate > fcRange.d2[1] || v.heartRate < fcRange.normal[0] * 0.6) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.heartRate > fcRange.d1[1] || v.heartRate < fcRange.normal[0]) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+    } else {
+      // Adult Vital Signs
+      if (v.respiratoryRate !== undefined) {
+        if (v.respiratoryRate >= 35 || v.respiratoryRate < 8) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.respiratoryRate >= 30 || v.respiratoryRate < 10) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.respiratoryRate >= 24) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+
+      if (v.heartRate !== undefined) {
+        if (v.heartRate >= 140 || v.heartRate < 40) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.heartRate >= 120 || v.heartRate < 50) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.heartRate >= 100 || v.heartRate < 60) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+
+      if (v.systolicBP !== undefined) {
+        if (v.systolicBP < 80) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.systolicBP < 90 || v.systolicBP > 220) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else if (v.systolicBP > 200) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+      if (v.diastolicBP !== undefined) {
+        if (v.diastolicBP > 130) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+        } else if (v.diastolicBP > 110) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        }
+      }
+    }
+
+    // --- 5. Temperature Modifiers (Both adult & pediatric) ---
+    if (v.temperature !== undefined) {
+      if (v.temperature < 32 || v.temperature >= 41) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.temperature < 35 || v.temperature >= 38.5) {
+        const isFeverWithSirs = v.temperature >= 38.5 && (
+          (v.heartRate && v.heartRate > 100) || 
+          (v.respiratoryRate && v.respiratoryRate > 22)
+        );
+        if (isFeverWithSirs) {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+        } else {
+          suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+        }
+      }
+    }
+
+    // --- 6. Glucose Modifier ---
+    if (v.glucose !== undefined) {
+      if (v.glucose < 40 || v.glucose > 500) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.glucose < 65 || v.glucose > 250) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    }
+
+    // --- 7. Clinical Findings / Discriminators Modifiers ---
+    if (data.findings?.some(f => FINDINGS.LEVEL_I.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+    }
+    if (data.findings?.some(f => FINDINGS.LEVEL_II.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+    }
+    if (data.findings?.some(f => FINDINGS.LEVEL_III.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+    }
+    if (data.findings?.some(f => FINDINGS.LEVEL_IV.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 4);
+    }
+    if (data.findings?.some(f => FINDINGS.LEVEL_V.includes(f))) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 5);
+    }
+
+    // Map level number to Roman numeral and label
+    const levelMap: Record<number, { level: TriageLevel; priority: string; wait: string; destination: string }> = {
+      1: { level: 'I', priority: 'Nivel I - Resucitación', wait: 'Inmediata (0 min)', destination: 'Shock Room' },
+      2: { level: 'II', priority: 'Nivel II - Emergencia', wait: '≤ 15 min', destination: 'Box de Emergencias' },
+      3: { level: 'III', priority: 'Nivel III - Urgente', wait: '≤ 30 min', destination: 'Consultorio de Urgencias' },
+      4: { level: 'IV', priority: 'Nivel IV - Menos Urgente', wait: '≤ 60 min', destination: 'Consultorio General' },
+      5: { level: 'V', priority: 'Nivel V - No Urgente', wait: '≤ 120 min', destination: 'Consulta Externa / Admisión' },
+    };
+
+    return levelMap[suggestedLevelValue] || levelMap[5];
+  };
+
+  const currentTriage = useMemo(() => calculateTriage(patient), [patient, tepForcedRed]);
 
   const getVitalsRequirements = () => {
-    return getVitalsRequirementsByLevel(currentTriage.level);
+    const isPediatric = patient.type === 'pediatric';
+    const levelStr = currentTriage.level; // 'I', 'II', 'III', 'IV', 'V'
+    const levelNum = levelStr === 'I' ? 1 : levelStr === 'II' ? 2 : levelStr === 'III' ? 3 : levelStr === 'IV' ? 4 : 5;
+
+    if (isPediatric) {
+      if ([1, 2, 3].includes(levelNum)) {
+        return {
+          heartRate: true,
+          respiratoryRate: true,
+          systolicBP: true,
+          diastolicBP: true,
+          oxygenSaturation: true,
+          temperature: true,
+          glasgow: false,
+        };
+      }
+      return {
+        heartRate: true,
+        respiratoryRate: true,
+        systolicBP: false,
+        diastolicBP: false,
+        oxygenSaturation: false,
+        temperature: false,
+        glasgow: false,
+      };
+    } else {
+      // Adult Algoritmo
+      if ([1, 2, 3].includes(levelNum)) {
+        return {
+          heartRate: true,
+          respiratoryRate: true,
+          systolicBP: true,
+          diastolicBP: true,
+          temperature: true,
+          glasgow: true,
+          oxygenSaturation: true,
+        };
+      }
+      return {
+        heartRate: true,
+        respiratoryRate: false,
+        systolicBP: true,
+        diastolicBP: false,
+        temperature: false,
+        glasgow: false,
+        oxygenSaturation: false,
+      };
+    }
   };
 
   const isStepValid = () => {
     if (step === 1) {
-      if (patient.estadoOperativo === 'preliminar_critico') {
-        return !!patient.name;
-      }
-      return !!(patient.name && patient.age !== undefined && patient.documentId);
+      return patient.name && patient.age !== undefined && patient.documentId && patient.type;
     }
-    if (step === 2) {
-      const ts = patient.tepStates;
-      if (!ts) return false;
-      return ts.apariencia !== 'no_evaluado' && ts.respiracion !== 'no_evaluado' && ts.circulacion !== 'no_evaluado';
+    if (step === 2 && patient.type === 'pediatric') {
+       const tep = patient.tep;
+       if (!tep) return false;
+       const hasAppearance = Object.values(tep.appearance).some(v => v);
+       const hasRespiration = Object.values(tep.respiration).some(v => v);
+       const hasCirculation = Object.values(tep.circulation).some(v => v);
+       return !!(hasAppearance && hasRespiration && hasCirculation);
     }
     if (step === 3) {
       return (patient.findings && patient.findings.length > 0) || patient.otherSymptoms;
@@ -511,7 +717,6 @@ export default function App() {
       if (reqs.oxygenSaturation && !hasValue(v.oxygenSaturation)) return false;
       if (reqs.temperature && !hasValue(v.temperature)) return false;
       if (reqs.glasgow && !hasValue(v.glasgow)) return false;
-      if (reqs.glucose && !hasValue(v.glucose)) return false;
       
       return true;
     }
@@ -520,6 +725,14 @@ export default function App() {
 
   const handleNext = () => {
     if (isStepValid()) {
+      if (step === 2 && patient.type === 'pediatric' && !tepForcedRed) {
+        const lados = getTepLadosAlterados(patient);
+        if (lados >= 2) {
+          setShowAlertModal(true);
+          return;
+        }
+      }
+
       if (step === 3 && !findingsAlertDismissed) {
         const hasHighAcuityFinding = patient.findings?.some(f => 
           FINDINGS.LEVEL_I.includes(f) || 
@@ -531,36 +744,32 @@ export default function App() {
           return;
         }
       }
-      setStep(s => s + 1);
+
+      if (step === 1 && patient.type === 'adult') {
+        setStep(3); // Skip TEP for adults
+      } else {
+        setStep(s => s + 1);
+      }
     }
   };
 
   const handleBack = () => {
-    setStep(s => Math.max(1, s - 1));
+    if (step === 3 && patient.type === 'adult') {
+      setStep(1);
+    } else {
+      setStep(s => s - 1);
+    }
   };
 
   const finalizeTriage = async () => {
-    const ageMonths = (patient.age || 0) * (patient.ageUnit === 'años' ? 12 : 1);
-    
-    // Set clinical target goals in minutes and timestamps
-    const levelMapMin: Record<string, number> = { 'I': 0, 'II': 15, 'III': 30, 'IV': 60, 'V': 120 };
-    const targetMin = levelMapMin[currentTriage.level] ?? 120;
-    const now = new Date();
-    const targetTime = new Date(now.getTime() + targetMin * 60 * 1000);
-
     const finalPatient: PatientData = {
       ...patient as PatientData,
       id: Math.random().toString(36).substr(2, 9).toUpperCase(),
-      arrivalDate: now.toISOString(),
+      arrivalDate: new Date().toISOString(),
       triageLevel: currentTriage.level,
       originalPriority: currentTriage.priority,
       waitTime: currentTriage.wait,
       suggestedDestination: currentTriage.destination,
-      objetivoEvaluacionMinutos: targetMin,
-      fechaObjetivoEvaluacion: targetTime.toISOString(),
-      frecuenciaCardiacaDs: getVitalsDSLabel(patient.vitals?.heartRate, ageMonths, 'FC').key,
-      frecuenciaRespiratoriaDs: getVitalsDSLabel(patient.vitals?.respiratoryRate, ageMonths, 'FR').key,
-      estadoOperativo: patient.estadoOperativo || 'en_espera'
     };
 
     // Save locally immediately
@@ -587,15 +796,9 @@ export default function App() {
           setSupabaseConnected(true);
           setDbSuccessMessage('Registro guardado en Supabase con éxito.');
           // Refresh list to ensure we have structural sync
-          try {
-            const remoteRecords = await fetchTriageRecords();
-            if (remoteRecords && remoteRecords.length > 0) {
-              setHistory(remoteRecords);
-              localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
-            }
-          } catch (fetchErr: any) {
-            console.warn('No se pudieron recuperar los registros remotos después de guardar:', fetchErr?.message || fetchErr);
-          }
+          const remoteRecords = await fetchTriageRecords();
+          setHistory(remoteRecords);
+          localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
           setTimeout(() => setDbSuccessMessage(null), 3000);
         } else {
           setSupabaseConnected(false);
@@ -662,10 +865,7 @@ export default function App() {
 
     // Findings & Destination
     const finalY = (doc as any).lastAutoTable.finalY + 10;
-    const findingsStr = Array.isArray(p.findings)
-      ? p.findings.join(', ')
-      : (typeof p.findings === 'string' ? p.findings : 'Ninguno');
-    doc.text(`Hallazgos: ${findingsStr || 'Ninguno'}`, 20, finalY);
+    doc.text(`Hallazgos: ${p.findings.join(', ') || 'Ninguno'}`, 20, finalY);
     if (p.otherSymptoms) {
       doc.text(`Otros Síntomas: ${p.otherSymptoms}`, 20, finalY + 10);
     }
@@ -718,9 +918,7 @@ export default function App() {
         ? `${p.vitals.systolicBP}/${p.vitals.diastolicBP}`
         : '';
       const dateStr = format(new Date(p.arrivalDate), 'dd/MM/yyyy HH:mm:ss');
-      const findingsStr = Array.isArray(p.findings)
-        ? p.findings.join(', ')
-        : (typeof p.findings === 'string' ? p.findings : '');
+      const findingsStr = p.findings ? p.findings.join(', ') : '';
 
       return [
         p.id,
@@ -781,7 +979,7 @@ TIPO DE PACIENTE: ${p.type === 'pediatric' ? 'PEDIÁTRICO' : 'ADULTO'}
 NIVEL DE GRAVEDAD: ${triage.level} (${triage.priority})
 DOCUMENTO: ${p.documentId || '---'}
 SIGNOS VITALES: FC: ${p.vitals?.heartRate ?? '---'} lpm, FR: ${p.vitals?.respiratoryRate ?? '---'} rpm, PA: ${p.vitals?.systolicBP ?? '---'}/${p.vitals?.diastolicBP ?? '---'} mmHg, SpO2: ${p.vitals?.oxygenSaturation ?? '---'}%, T°: ${p.vitals?.temperature ?? '---'}°C${tepDetails}
-PROBLEMA PRINCIPAL: ${(Array.isArray(p.findings) ? p.findings.join(', ') : (typeof p.findings === 'string' ? p.findings : '')) || 'Sin hallazgos específicos'}${p.otherSymptoms ? ` (${p.otherSymptoms})` : ''}
+PROBLEMA PRINCIPAL: ${p.findings?.join(', ') || 'Sin hallazgos específicos'}${p.otherSymptoms ? ` (${p.otherSymptoms})` : ''}
 ESCALA DE GLASGOW: ${p.vitals?.glasgow ?? '---'}/15
 DESTINO SUGERIDO: ${triage.destination}
     `.trim();
@@ -858,53 +1056,36 @@ DESTINO SUGERIDO: ${triage.destination}
                     exit={{ opacity: 0, x: -20 }}
                     className="space-y-6"
                   >
-                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6 font-sans">
-                      <div className="flex items-center gap-2.5 text-blue-600">
-                        <User size={28} />
-                        <h2 className="text-2xl font-black tracking-tight">Identificación del Paciente Pediátrico <span className="text-red-500">*</span></h2>
-                      </div>
-                      <span className="text-xs bg-rose-100 text-rose-800 px-3.5 py-1.5 rounded-full font-black uppercase tracking-wider">
-                        Solo Pediatría / Infantil
-                      </span>
+                    <div className="flex items-center gap-2 text-blue-600 mb-6 font-sans">
+                      <User size={28} />
+                      <h2 className="text-2xl font-black tracking-tight">Identificación del Paciente <span className="text-red-500">*</span></h2>
                     </div>
 
-                    {/* Botón de Registro Crítico / Bypass Directo */}
-                    <div className={cn(
-                      "p-5 rounded-2xl border-2 transition-all shadow-sm",
-                      patient.estadoOperativo === 'preliminar_critico'
-                        ? "bg-rose-50 border-rose-500 shadow-md shadow-rose-100 animate-pulse"
-                        : "bg-slate-50 border-slate-200"
-                    )}>
-                      <div className="flex items-start gap-4">
-                        <ShieldAlert className="text-rose-600 mt-1 shrink-0 animate-bounce" size={28} />
-                        <div className="space-y-1.5 flex-1">
-                          <h3 className="font-sans font-black text-slate-900 text-base sm:text-[17px] tracking-tight">
-                            🚨 Registro Crítico Inicial (Bypass de Triage)
-                          </h3>
-                          <p className="text-xs sm:text-sm text-slate-600 font-medium leading-relaxed">
-                            Active este modo si el paciente ingresa con riesgo de muerte inmediata o en paro. Bypasará la carga obligatoria de identificación y direccionará de forma inmediata al Shock Room (Sugerido CTAS I).
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const isCrit = patient.estadoOperativo === 'preliminar_critico';
-                              setPatient({
-                                ...patient,
-                                name: isCrit ? '' : 'PACIENTE CRÍTICO PRELIMINAR',
-                                estadoOperativo: isCrit ? 'en_espera' : 'preliminar_critico',
-                                age: isCrit ? undefined : patient.age,
-                                documentId: isCrit ? '' : patient.documentId
-                              });
-                            }}
-                            className={cn(
-                              "px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wide transition-all border cursor-pointer mt-2",
-                              patient.estadoOperativo === 'preliminar_critico'
-                                ? "bg-rose-600 text-white border-rose-600 hover:bg-rose-700 shadow-sm"
-                                : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
-                            )}
-                          >
-                            {patient.estadoOperativo === 'preliminar_critico' ? '✓ Desactivar Modo Crítico' : '⚡ Activar Registro Crítico Directo'}
-                          </button>
+                    <div className="grid grid-cols-1 gap-6">
+                      <div className="space-y-2">
+                        <label className="text-base font-black text-slate-800 flex items-center gap-1.5">
+                          Tipo de Paciente <span className="text-red-500 font-extrabold">*</span>
+                        </label>
+                        <div className="flex gap-4">
+                          {[
+                            { value: 'adult', label: 'Adulto', icon: <User size={22} /> },
+                            { value: 'pediatric', label: 'Pediátrico / Infantil', icon: <User size={22} /> }
+                          ].map(t => (
+                            <button
+                              key={t.value}
+                              type="button"
+                              onClick={() => setPatient({...patient, type: t.value as any})}
+                              className={cn(
+                                "flex-1 py-5 rounded-2xl border-2 font-black text-base md:text-lg transition-all flex flex-col items-center gap-2.5 cursor-pointer shadow-sm",
+                                patient.type === t.value 
+                                  ? "bg-blue-600 border-blue-600 text-white shadow-lg opacity-100 scale-[1.01]" 
+                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50 hover:border-slate-300 opacity-80"
+                              )}
+                            >
+                              {t.icon}
+                              {t.label}
+                            </button>
+                          ))}
                         </div>
                       </div>
                     </div>
@@ -914,22 +1095,18 @@ DESTINO SUGERIDO: ${triage.destination}
                         <label className="text-base font-black text-slate-800">Nombre Completo <span className="text-red-500 font-extrabold">*</span></label>
                         <input 
                           type="text" 
-                          disabled={patient.estadoOperativo === 'preliminar_critico'}
-                          className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400 disabled:bg-slate-100 disabled:text-slate-500"
+                          className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400"
                           placeholder="Ej. Juan Pérez"
                           value={patient.name}
                           onChange={e => setPatient({...patient, name: e.target.value})}
                         />
                       </div>
                       <div className="space-y-2">
-                        <label className="text-base font-black text-slate-800">
-                          Documento (DNI/CI) {patient.estadoOperativo !== 'preliminar_critico' && <span className="text-red-500 font-extrabold">*</span>}
-                        </label>
+                        <label className="text-base font-black text-slate-800">Documento (DNI/CI) <span className="text-red-500 font-extrabold">*</span></label>
                         <input 
                           type="text" 
-                          disabled={patient.estadoOperativo === 'preliminar_critico'}
-                          className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400 disabled:bg-slate-100 disabled:text-slate-500"
-                          placeholder={patient.estadoOperativo === 'preliminar_critico' ? "No requerido en modo crítico" : "Ej. 12345678"}
+                          className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400"
+                          placeholder="Ej. 12345678"
                           value={patient.documentId}
                           onChange={e => {
                             const val = e.target.value.replace(/\D/g, '');
@@ -939,30 +1116,42 @@ DESTINO SUGERIDO: ${triage.destination}
                       </div>
                       <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
-                          <label className="text-base font-black text-slate-800">
-                            Edad {patient.estadoOperativo !== 'preliminar_critico' && <span className="text-red-500 font-extrabold">*</span>}
-                          </label>
+                          <label className="text-base font-black text-slate-800">Edad <span className="text-red-500 font-extrabold">*</span></label>
                           <input 
                             type="number" 
-                            disabled={patient.estadoOperativo === 'preliminar_critico'}
-                            className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400 disabled:bg-slate-100 disabled:text-slate-500"
-                            placeholder={patient.estadoOperativo === 'preliminar_critico' ? "N/A" : "Ej. 5"}
+                            className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-semibold text-slate-800 shadow-sm placeholder:text-slate-400"
+                            placeholder="Ej. 35"
                             value={patient.age ?? ''}
                             onChange={e => {
                               const val = e.target.value ? parseInt(e.target.value) : undefined;
-                              setPatient({...patient, age: val});
+                              let newType = patient.type;
+                              if (val !== undefined) {
+                                if (patient.ageUnit === 'años') {
+                                  newType = val > 18 ? 'adult' : 'pediatric';
+                                } else {
+                                  newType = 'pediatric';
+                                }
+                              }
+                              setPatient({...patient, age: val, type: newType as any});
                             }}
                           />
                         </div>
                         <div className="space-y-2">
                           <label className="text-base font-black text-slate-800">Unidad</label>
                           <select 
-                            disabled={patient.estadoOperativo === 'preliminar_critico'}
-                            className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-bold text-slate-800 bg-white shadow-sm cursor-pointer disabled:bg-slate-100"
+                            className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-base font-bold text-slate-800 bg-white shadow-sm cursor-pointer"
                             value={patient.ageUnit}
                             onChange={e => {
                               const unit = e.target.value as any;
-                              setPatient({...patient, ageUnit: unit});
+                              let newType = patient.type;
+                              if (patient.age !== undefined) {
+                                if (unit === 'años') {
+                                  newType = patient.age > 18 ? 'adult' : 'pediatric';
+                                } else {
+                                  newType = 'pediatric';
+                                }
+                              }
+                              setPatient({...patient, ageUnit: unit, type: newType});
                             }}
                           >
                             <option value="años">Años</option>
@@ -977,10 +1166,9 @@ DESTINO SUGERIDO: ${triage.destination}
                             <button
                               key={g}
                               type="button"
-                              disabled={patient.estadoOperativo === 'preliminar_critico'}
                               onClick={() => setPatient({...patient, gender: g as any})}
                               className={cn(
-                                "flex-1 py-4 rounded-xl border-2 font-black text-base transition-all cursor-pointer shadow-sm disabled:opacity-50 disabled:cursor-not-allowed",
+                                "flex-1 py-4 rounded-xl border-2 font-black text-base transition-all cursor-pointer shadow-sm",
                                 patient.gender === g ? "bg-blue-600 border-blue-600 text-white shadow-md scale-[1.01]" : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
                               )}
                             >
@@ -990,50 +1178,8 @@ DESTINO SUGERIDO: ${triage.destination}
                         </div>
                       </div>
                     </div>
-
-                    {/* Datos del Acompañante */}
-                    <div className="mt-4 border-t border-slate-200/80 pt-6 space-y-4">
-                      <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                        <User size={18} className="text-blue-500" /> Datos del Acompañante (Opcional)
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="space-y-2">
-                          <label className="text-xs font-black uppercase text-slate-500">Nombre del acompañante</label>
-                          <input 
-                            type="text" 
-                            disabled={patient.estadoOperativo === 'preliminar_critico'}
-                            className="w-full p-3 rounded-lg border border-slate-200 outline-none font-semibold text-slate-800 text-sm disabled:bg-slate-100"
-                            placeholder="Ej. María Gómez"
-                            value={patient.nombreAcompanante || ''}
-                            onChange={e => setPatient({...patient, nombreAcompanante: e.target.value})}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-black uppercase text-slate-500">Teléfono</label>
-                          <input 
-                            type="text" 
-                            disabled={patient.estadoOperativo === 'preliminar_critico'}
-                            className="w-full p-3 rounded-lg border border-slate-200 outline-none font-semibold text-slate-800 text-sm disabled:bg-slate-100"
-                            placeholder="Ej. +54 9 11..."
-                            value={patient.telefonoAcompanante || ''}
-                            onChange={e => setPatient({...patient, telefonoAcompanante: e.target.value})}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-black uppercase text-slate-500">Parentesco</label>
-                          <input 
-                            type="text" 
-                            disabled={patient.estadoOperativo === 'preliminar_critico'}
-                            className="w-full p-3 rounded-lg border border-slate-200 outline-none font-semibold text-slate-800 text-sm disabled:bg-slate-100"
-                            placeholder="Ej. Madre, Padre, Tutor"
-                            value={patient.parentescoAcompanante || ''}
-                            onChange={e => setPatient({...patient, parentescoAcompanante: e.target.value})}
-                          />
-                        </div>
-                      </div>
-                    </div>
                     <p className="text-xs font-bold text-slate-400 mt-2">
-                      * El triage está configurado exclusivamente para uso en pacientes pediátricos y lactantes.
+                      * El tipo de paciente se selecciona automáticamente según la edad (más de 18 años = Adulto).
                     </p>
                   </motion.div>
                 )}
@@ -1052,197 +1198,102 @@ DESTINO SUGERIDO: ${triage.destination}
                         <h2 className="text-2xl font-black tracking-tight">Triángulo de Evaluación Pediátrico (TEP)</h2>
                       </div>
                       <span className="text-xs bg-blue-100 text-blue-800 px-3.5 py-1.5 rounded-full font-black uppercase tracking-wider shrink-0 self-start sm:self-auto">
-                        Obligatorio en Pediatría
+                        Obligatorio para pediatría
                       </span>
                     </div>
 
                     <p className="text-base text-slate-600 font-medium leading-relaxed">
-                      Evalúe cada lado del triángulo de forma independiente seleccionando su estado clínico y detallando hallazgos si está alterado:
+                      Por favor, evalúe las 3 componentes del triángulo. Seleccione si está <b>estable</b> o marque los síntomas <b>anormales</b> correspondientes:
                     </p>
-
-                    {/* Panel de Decisiones Clínicas de Bypass Crítico Manual */}
-                    <div className={cn(
-                      "p-5 rounded-2xl border-2 transition-all shadow-sm",
-                      tepForcedRed ? "bg-red-50 border-red-500 shadow-md shadow-red-100" : "bg-slate-50 border-slate-200"
-                    )}>
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-3 pb-2 border-b border-slate-200">
-                        <div className="flex items-center gap-2">
-                          <ShieldAlert size={24} className="text-red-600" />
-                          <h3 className="font-sans font-black text-slate-900 text-base sm:text-lg">
-                            Bypass Crítico por Criterio Clínico Explícito
-                          </h3>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setTepForcedRed(!tepForcedRed)}
-                          className={cn(
-                            "px-4 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all border cursor-pointer",
-                            tepForcedRed 
-                              ? "bg-red-600 text-white border-red-600 hover:bg-red-700" 
-                              : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
-                          )}
-                        >
-                          {tepForcedRed ? '✓ Bypass Manual Activo (CTAS I)' : '⚡ Forzar Bypass CTAS I'}
-                        </button>
-                      </div>
-                      
-                      <div className="space-y-3">
-                        <p className="text-xs font-bold text-slate-500">
-                          Banderas rojas que justifican bypass crítico inmediato por criterio del profesional:
-                        </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-xs font-semibold text-slate-700">
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Apnea o respiración agónica</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Ausencia total de respuesta (Coma)</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Shock evidente / mala perfusión</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Convulsión activa prolongada</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Cianosis central con compromiso clínico</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Obstrucción grave de vía aérea</span>
-                        </div>
-                      </div>
-                    </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       {[
-                        { 
-                          title: 'Apariencia', 
-                          key: 'apariencia', 
-                          tepKey: 'appearance',
-                          options: [
-                            { k: 'abnormalActivity', l: 'Actividad anormal' },
-                            { k: 'unresponsive', l: 'Arreactivo / Inconsciente' },
-                            { k: 'abnormalVisualContact', l: 'Contacto visual anormal' },
-                            { k: 'irritableInconsolable', l: 'Irritable, no consolable' },
-                            { k: 'abnormalCry', l: 'Llanto anormal' },
-                            { k: 'abnormalTone', l: 'Tono anormal / Hipotonía' },
-                          ]
-                        },
-                        { 
-                          title: 'Respiración', 
-                          key: 'respiracion', 
-                          tepKey: 'respiration',
-                          options: [
-                            { k: 'agitation', l: 'Agitación o taquipnea' },
-                            { k: 'apnea', l: 'Apnea' },
-                            { k: 'abnormalPosition', l: 'Posición anormal (Trípode)' },
-                            { k: 'abnormalSounds', l: 'Ruidos anormales (Estridor/Quejido)' },
-                            { k: 'retractions', l: 'Tirajes o retracción' },
-                          ]
-                        },
-                        { 
-                          title: 'Circulación', 
-                          key: 'circulacion', 
-                          tepKey: 'circulation',
-                          options: [
-                            { k: 'cyanosis', l: 'Cianosis' },
-                            { k: 'mottled', l: 'Moteado o piel reticulada' },
-                            { k: 'pallor', l: 'Palidez' },
-                            { k: 'flushing', l: 'Rubicundez' },
-                          ]
-                        }
+                        { title: 'Apariencia', key: 'appearance', options: [
+                          { k: 'normal', l: 'Estable / Sin alteración' },
+                          { k: 'abnormalActivity', l: 'Actividad anormal' },
+                          { k: 'unresponsive', l: 'Arreactivo' },
+                          { k: 'abnormalVisualContact', l: 'Contacto visual anormal' },
+                          { k: 'irritableInconsolable', l: 'Irritable, no consolable' },
+                          { k: 'abnormalCry', l: 'Llanto anormal' },
+                          { k: 'abnormalTone', l: 'Tono anormal' },
+                        ]},
+                        { title: 'Respiración', key: 'respiration', options: [
+                          { k: 'normal', l: 'Estable / Sin alteración' },
+                          { k: 'agitation', l: 'Agitación' },
+                          { k: 'apnea', l: 'Apnea' },
+                          { k: 'abnormalPosition', l: 'Posición anormal' },
+                          { k: 'abnormalSounds', l: 'Ruidos anormales' },
+                          { k: 'retractions', l: 'Tirajes' },
+                        ]},
+                        { title: 'Circulación', key: 'circulation', options: [
+                          { k: 'normal', l: 'Estable / Sin alteración' },
+                          { k: 'cyanosis', l: 'Cianosis' },
+                          { k: 'mottled', l: 'Moteado-reticulado' },
+                          { k: 'pallor', l: 'Palidez' },
+                          { k: 'flushing', l: 'Rubicundez' },
+                        ]}
                       ].map(section => {
-                        const currentStatus = patient.tepStates?.[section.key as keyof typeof patient.tepStates] || 'no_evaluado';
-                        
+                        const hasSelected = Object.values((patient.tep as any)[section.key]).some(v => v);
                         return (
                           <div key={section.title} className={cn(
-                            "p-5 rounded-2xl border-2 transition-all shadow-sm flex flex-col justify-between",
-                            currentStatus === 'alterado' && "bg-rose-50 border-rose-300 shadow-md",
-                            currentStatus === 'normal' && "bg-emerald-50 border-emerald-200 shadow-sm",
-                            currentStatus === 'no_valorable' && "bg-amber-50 border-amber-200 shadow-sm",
-                            currentStatus === 'no_evaluado' && "bg-white border-slate-200"
+                            "p-5 rounded-2xl border-2 transition-all shadow-sm",
+                            hasSelected ? "bg-slate-50/80 border-blue-400 shadow-md shadow-slate-100" : "bg-white border-dashed border-slate-300"
                           )}>
-                            <div>
-                              <div className="flex justify-between items-center mb-4 border-b border-slate-250/60 pb-2.5">
-                                <h3 className="font-sans font-black text-slate-950 text-lg tracking-tight">{section.title}</h3>
-                                <span className={cn(
-                                  "text-[10px] px-2.5 py-1 rounded-full font-black uppercase tracking-wider font-mono border",
-                                  currentStatus === 'alterado' && "bg-rose-100 text-rose-800 border-rose-200",
-                                  currentStatus === 'normal' && "bg-emerald-100 text-emerald-800 border-emerald-200",
-                                  currentStatus === 'no_valorable' && "bg-amber-100 text-amber-850 border-amber-200",
-                                  currentStatus === 'no_evaluado' && "bg-slate-100 text-slate-600 border-slate-200"
-                                )}>
-                                  {currentStatus === 'no_evaluado' ? 'Pendiente' : currentStatus.replace('_', ' ')}
-                                </span>
-                              </div>
-
-                              {/* Selector de los 4 estados requeridos */}
-                              <div className="grid grid-cols-2 gap-2 mb-4">
-                                {[
-                                  { value: 'normal', label: 'Normal', color: 'peer-checked:bg-emerald-600' },
-                                  { value: 'alterado', label: 'Alterado', color: 'peer-checked:bg-rose-600' },
-                                  { value: 'no_valorable', label: 'No Valorable', color: 'peer-checked:bg-amber-600' },
-                                  { value: 'no_evaluado', label: 'Sin Evaluar', color: 'peer-checked:bg-slate-600' }
-                                ].map(st => (
-                                  <label key={st.value} className="relative block cursor-pointer">
+                            <div className="flex justify-between items-center mb-4 border-b border-slate-350 pb-2.5">
+                              <h3 className="font-sans font-black text-slate-900 text-lg sm:text-[19px] tracking-tight">{section.title}</h3>
+                              {hasSelected ? (
+                                <span className="text-xs text-green-700 bg-green-100 px-2.5 py-1 rounded-full font-black uppercase tracking-wider font-mono">Evaluado</span>
+                              ) : (
+                                <span className="text-xs text-amber-700 bg-amber-100 px-2.5 py-1 rounded-full font-black uppercase tracking-wider font-mono">Pendiente *</span>
+                              )}
+                            </div>
+                            <div className="space-y-2.5">
+                              {section.options.map(opt => {
+                                const isChecked = !!(patient.tep as any)[section.key][opt.k];
+                                return (
+                                  <label key={opt.k} className={cn(
+                                    "flex items-center gap-3 text-[15px] cursor-pointer p-2.5 rounded-xl transition-all hover:bg-slate-100/90 border border-transparent select-none",
+                                    opt.k === 'normal' && isChecked && "bg-green-100/70 text-green-900 border-green-200 font-bold hover:bg-green-100",
+                                    opt.k !== 'normal' && isChecked && "bg-red-100/70 text-red-950 border-red-205 font-bold hover:bg-red-100"
+                                  )}>
                                     <input 
-                                      type="radio"
-                                      name={`tep-status-${section.key}`}
-                                      value={st.value}
-                                      checked={currentStatus === st.value}
-                                      className="peer sr-only"
+                                      type="checkbox" 
+                                      className="w-5 h-5 rounded-md border-slate-450 text-blue-600 focus:ring-blue-500 cursor-pointer"
+                                      checked={isChecked}
                                       onChange={() => {
-                                        const nextStates = { ...patient.tepStates!, [section.key]: st.value as any };
-                                        
-                                        // If not alterado, clear specific abnormalities
                                         const nextTep = { ...patient.tep! };
-                                        if (st.value !== 'alterado') {
-                                          const secKey = section.tepKey;
-                                          const secObj = { ...(nextTep as any)[secKey] };
-                                          Object.keys(secObj).forEach(k => {
-                                            secObj[k] = false;
-                                          });
-                                          (nextTep as any)[secKey] = secObj;
+                                        const sectionObj = { ...(nextTep as any)[section.key] };
+                                        
+                                        if (opt.k === 'normal') {
+                                          const isCheckingNow = !sectionObj.normal;
+                                          if (isCheckingNow) {
+                                            // turn off everything, set normal to true
+                                            Object.keys(sectionObj).forEach(key => {
+                                              sectionObj[key] = false;
+                                            });
+                                            sectionObj.normal = true;
+                                          } else {
+                                            sectionObj.normal = false;
+                                          }
+                                        } else {
+                                          // toggle key, set normal to false
+                                          sectionObj[opt.k] = !sectionObj[opt.k];
+                                          sectionObj.normal = false;
                                         }
-
-                                        setPatient({ ...patient, tepStates: nextStates, tep: nextTep });
+                                        
+                                        (nextTep as any)[section.key] = sectionObj;
+                                        const tempPatient = { ...patient, tep: nextTep };
+                                        const nextLados = getTepLadosAlterados(tempPatient);
+                                        if (nextLados < 2) {
+                                          setTepForcedRed(false);
+                                        }
+                                        setPatient(tempPatient);
                                       }}
                                     />
-                                    <div className={cn(
-                                      "py-2 text-center border-2 border-slate-200 rounded-xl font-black text-xs text-slate-600 transition-all select-none hover:bg-slate-50",
-                                      "peer-checked:border-transparent peer-checked:text-white",
-                                      currentStatus === st.value && (
-                                        st.value === 'normal' ? "bg-emerald-600 text-white border-transparent shadow-sm" :
-                                        st.value === 'alterado' ? "bg-rose-600 text-white border-transparent shadow-sm" :
-                                        st.value === 'no_valorable' ? "bg-amber-500 text-white border-transparent shadow-sm" :
-                                        "bg-slate-500 text-white border-transparent shadow-sm"
-                                      )
-                                    )}>
-                                      {st.label}
-                                    </div>
+                                    <span className="leading-tight font-sans text-[14px] sm:text-[15px] font-semibold tracking-tight">{opt.l}</span>
                                   </label>
-                                ))}
-                              </div>
-
-                              {/* Detalles si el estado es alterado */}
-                              {currentStatus === 'alterado' && (
-                                <div className="space-y-2 mt-2 bg-white/65 p-3 rounded-xl border border-rose-150 shadow-inner">
-                                  <p className="text-[10px] font-black uppercase text-rose-800 tracking-wider mb-2">Marcar hallazgos específicos:</p>
-                                  {section.options.map(opt => {
-                                    const isChecked = !!(patient.tep as any)[section.tepKey][opt.k];
-                                    return (
-                                      <label key={opt.k} className={cn(
-                                        "flex items-center gap-2.5 text-xs cursor-pointer p-2 rounded-lg transition-all border border-transparent select-none",
-                                        isChecked ? "bg-rose-100 text-rose-950 border-rose-200 font-bold" : "hover:bg-slate-100 text-slate-700"
-                                      )}>
-                                        <input 
-                                          type="checkbox" 
-                                          className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
-                                          checked={isChecked}
-                                          onChange={() => {
-                                            const nextTep = { ...patient.tep! };
-                                            const secKey = section.tepKey;
-                                            const secObj = { ...(nextTep as any)[secKey] };
-                                            secObj[opt.k] = !secObj[opt.k];
-                                            secObj.normal = false;
-                                            (nextTep as any)[secKey] = secObj;
-                                            setPatient({ ...patient, tep: nextTep });
-                                          }}
-                                        />
-                                        <span className="leading-snug">{opt.l}</span>
-                                      </label>
-                                    );
-                                  })}
-                                </div>
-                              )}
+                                );
+                              })}
                             </div>
                           </div>
                         );
@@ -1356,7 +1407,7 @@ DESTINO SUGERIDO: ${triage.destination}
                         <Heart size={28} />
                         <h2 className="text-2xl font-black tracking-tight">Signos Vitales / Constantes</h2>
                       </div>
-                      <span className="text-xs font-black bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
+                      <span className="text-xs font-black bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-205 shrink-0 self-start sm:self-auto">
                         Campos con <span className="text-red-500 font-bold">*</span> son obligatorios
                       </span>
                     </div>
@@ -1365,8 +1416,6 @@ DESTINO SUGERIDO: ${triage.destination}
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                       {(() => {
                         const reqs = getVitalsRequirements();
-                        const ageMonths = patient.ageUnit === 'meses' ? (patient.age || 0) : (patient.age || 0) * 12;
-
                         return [
                           { key: 'heartRate', label: 'FC (lpm)', icon: <Activity size={18} /> },
                           { key: 'respiratoryRate', label: 'FR (rpm)', icon: <Timer size={18} /> },
@@ -1374,178 +1423,31 @@ DESTINO SUGERIDO: ${triage.destination}
                           { key: 'diastolicBP', label: 'PAD (mmHg)', icon: <Activity size={18} /> },
                           { key: 'oxygenSaturation', label: 'SpO2 (%)', icon: <Info size={18} /> },
                           { key: 'temperature', label: 'T° (°C)', icon: <Stethoscope size={18} /> },
-                          { key: 'glucose', label: 'Glucemia (mg/dL)', icon: <Activity size={18} /> },
                         ].map(v => {
                           const isRequired = reqs[v.key as keyof typeof reqs];
-                          const dsInfo = (v.key === 'heartRate' || v.key === 'respiratoryRate')
-                            ? getVitalsDSLabel(patient.vitals?.[v.key as keyof VitalSigns] as number, ageMonths, v.key === 'heartRate' ? 'FC' : 'FR')
-                            : null;
-
                           return (
-                            <div key={v.key} className="space-y-2 relative flex flex-col justify-between p-3.5 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
-                              <div className="space-y-2">
-                                <label className="text-[11px] md:text-xs font-black text-slate-650 flex items-center justify-between gap-1.5 uppercase tracking-wide">
-                                  <span className="flex items-center gap-1.5">{v.icon} {v.label} {isRequired ? <span className="text-red-500 font-black">*</span> : <span className="text-slate-400 font-medium text-[10px] lowercase">(opcional)</span>}</span>
-                                  {dsInfo && patient.vitals?.[v.key as keyof VitalSigns] !== undefined && (
-                                    <span className={cn("text-[9px] font-black uppercase px-2 py-0.5 rounded-full border shadow-xs animate-pulse", dsInfo.colorClass)}>
-                                      {dsInfo.label}
-                                    </span>
-                                  )}
-                                </label>
-                                <input 
-                                  type="number" 
-                                  step={v.key === 'temperature' ? 0.1 : 1}
-                                  className="w-full p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-base font-black text-slate-800 shadow-sm placeholder:text-slate-400 bg-white"
-                                  placeholder={isRequired ? "---" : "--- (opcional)"}
-                                  value={patient.vitals![v.key as keyof VitalSigns] ?? ''}
-                                  onChange={e => {
-                                    const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                                    setPatient({
-                                      ...patient, 
-                                      vitals: { ...patient.vitals!, [v.key]: val }
-                                    });
-                                  }}
-                                />
-                              </div>
-
-                              {/* Condiciones de SpO2 */}
-                              {v.key === 'oxygenSaturation' && (
-                                <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex gap-2 w-full">
-                                  {[
-                                    { value: 'aire_ambiente', label: 'Aire Amb.' },
-                                    { value: 'oxigeno_suplementario', label: 'O2 Supl.' }
-                                  ].map(opt => (
-                                    <button
-                                      key={opt.value}
-                                      type="button"
-                                      onClick={() => setPatient({
-                                        ...patient,
-                                        vitals: { ...patient.vitals!, condicionMedicionSpo2: opt.value }
-                                      })}
-                                      className={cn(
-                                        "flex-1 py-1 px-1 rounded-lg text-[9px] font-black border transition-all cursor-pointer select-none",
-                                        patient.vitals?.condicionMedicionSpo2 === opt.value
-                                          ? "bg-blue-600 border-transparent text-white shadow-sm"
-                                          : "bg-white border-slate-250 text-slate-500 hover:bg-slate-100"
-                                      )}
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-
-                              {/* Método de temperatura */}
-                              {v.key === 'temperature' && (
-                                <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex gap-1.5 w-full">
-                                  {[
-                                    { value: 'axilar', label: 'Axilar' },
-                                    { value: 'rectal', label: 'Rectal' },
-                                    { value: 'timpanica', label: 'Timp.' }
-                                  ].map(opt => (
-                                    <button
-                                      key={opt.value}
-                                      type="button"
-                                      onClick={() => setPatient({
-                                        ...patient,
-                                        vitals: { ...patient.vitals!, metodoTemperatura: opt.value }
-                                      })}
-                                      className={cn(
-                                        "flex-1 py-1 px-1 rounded-lg text-[9px] font-black border transition-all cursor-pointer select-none",
-                                        patient.vitals?.metodoTemperatura === opt.value
-                                          ? "bg-blue-600 border-transparent text-white shadow-sm"
-                                          : "bg-white border-slate-250 text-slate-500 hover:bg-slate-100"
-                                      )}
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
+                            <div key={v.key} className="space-y-2 relative">
+                              <label className="text-xs md:text-sm font-black text-slate-600 flex items-center gap-1.5 uppercase tracking-wide">
+                                {v.icon} {v.label} {isRequired ? <span className="text-red-500 font-black">*</span> : <span className="text-slate-400 font-medium text-[11px] lowercase">(opcional)</span>}
+                              </label>
+                              <input 
+                                type="number" 
+                                step={v.key === 'temperature' ? 0.1 : 1}
+                                className="w-full p-4 rounded-xl border border-slate-200 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-base font-bold text-slate-800 shadow-sm placeholder:text-slate-400"
+                                placeholder={isRequired ? "---" : "--- (Opcional)"}
+                                value={patient.vitals![v.key as keyof VitalSigns] ?? ''}
+                                onChange={e => {
+                                  const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                  setPatient({
+                                    ...patient, 
+                                    vitals: { ...patient.vitals!, [v.key]: val }
+                                  });
+                                }}
+                              />
                             </div>
                           );
                         });
                       })()}
-                    </div>
-
-                    {/* Panel de Evaluación de Dolor (EVA) y Estado Neurológico AVDI */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                      {/* DOLOR (EVA) */}
-                      <div className="p-5 border border-slate-200 rounded-2xl bg-white space-y-4 shadow-sm flex flex-col justify-between">
-                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                          <div className="flex items-center gap-2">
-                            <Activity size={18} className="text-rose-600" />
-                            <h3 className="font-extrabold text-slate-900 text-sm md:text-base">Evaluación del Dolor (Escala EVA)</h3>
-                          </div>
-                          <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-100 uppercase font-mono">
-                            {patient.vitals?.painScore !== undefined 
-                              ? (patient.vitals.painScore === 0 ? 'Sin Dolor' : 
-                                 patient.vitals.painScore <= 3 ? 'Leve' : 
-                                 patient.vitals.painScore <= 7 ? 'Moderado' : 'Severo')
-                              : 'No evaluado'}
-                          </span>
-                        </div>
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center text-xs font-bold text-slate-500">
-                            <span>Sin dolor (0)</span>
-                            <span className="text-sm font-black text-slate-800">{patient.vitals?.painScore ?? 0} / 10</span>
-                            <span>Dolor máximo (10)</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="10"
-                            step="1"
-                            value={patient.vitals?.painScore ?? 0}
-                            onChange={e => setPatient({
-                              ...patient,
-                              vitals: { ...patient.vitals!, painScore: parseInt(e.target.value), painScale: 'EVA' }
-                            })}
-                            className="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-rose-600 border border-slate-200"
-                          />
-                        </div>
-                      </div>
-
-                      {/* NEUROLÓGICO (AVDI) */}
-                      <div className="p-5 border border-slate-200 rounded-2xl bg-white space-y-4 shadow-sm flex flex-col justify-between">
-                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                          <div className="flex items-center gap-2">
-                            <ShieldAlert size={18} className="text-purple-600" />
-                            <h3 className="font-extrabold text-slate-900 text-sm md:text-base">Clasificación Neurológica AVDI</h3>
-                          </div>
-                          <span className="text-[10px] font-black text-purple-700 bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-100 uppercase font-mono">
-                            {patient.vitals?.avdi === 'A' ? 'Alerta' :
-                             patient.vitals?.avdi === 'V' ? 'Voz' :
-                             patient.vitals?.avdi === 'D' ? 'Dolor' :
-                             patient.vitals?.avdi === 'I' ? 'Inconsciente' : 'Sin evaluar'}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-4 gap-1.5">
-                          {[
-                            { value: 'A', label: 'Alerta (A)' },
-                            { value: 'V', label: 'Voz (V)' },
-                            { value: 'D', label: 'Dolor (D)' },
-                            { value: 'I', label: 'Inconsciente (I)' }
-                          ].map(opt => (
-                            <button
-                              key={opt.value}
-                              type="button"
-                              onClick={() => setPatient({
-                                ...patient,
-                                vitals: { ...patient.vitals!, avdi: opt.value }
-                              })}
-                              className={cn(
-                                "py-2.5 rounded-xl border font-black text-xs transition-all cursor-pointer shadow-sm text-center select-none",
-                                patient.vitals?.avdi === opt.value
-                                  ? "bg-purple-600 border-transparent text-white font-black"
-                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
-                              )}
-                            >
-                              {opt.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
                     </div>
 
                     {/* Escala de Coma de Glasgow Separada y Profesional */}
@@ -1864,173 +1766,116 @@ DESTINO SUGERIDO: ${triage.destination}
             </motion.div>
           )}
 
-          {/* Real-time Triage Gravity Level & Live Timer Monitor */}
-          <div className="bg-white p-6 sm:p-7 rounded-[24px] border border-slate-200/85 shadow-[0_12px_32px_rgba(15,23,42,0.08)] space-y-5">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="space-y-0.5">
-                <h3 className="font-sans font-black text-slate-900 text-sm md:text-base flex items-center gap-1.5">
-                  <Activity size={18} className="text-blue-600 animate-pulse" />
-                  Paciente en Evaluación
-                </h3>
-                <p className="text-[10px] font-bold text-slate-400 font-mono uppercase">Monitoreo Clínico de Sesión</p>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <span className={cn(
-                  "w-2 h-2 rounded-full shadow-[0_0_8px_currentColor] transition-all duration-500",
-                  isOnline && supabaseConnected 
-                    ? "bg-emerald-500 text-emerald-500 animate-pulse" 
-                    : "bg-rose-500 text-rose-500"
-                )} />
-                <span className={cn(
-                  "text-[9px] font-black uppercase tracking-wider font-sans",
-                  isOnline && supabaseConnected ? "text-emerald-600" : "text-rose-500"
-                )}>
-                  {isOnline && supabaseConnected ? 'En Línea' : 'Local'}
+          {/* Real-time Triage Gravity Level Monitor */}
+          <div className="bg-white p-8 rounded-[24px] border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.10)] space-y-5">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+              <h3 className="font-mono font-black flex items-center justify-between gap-2.5 text-sm sm:text-base uppercase tracking-widest text-slate-500 w-full">
+                <span className="flex items-center gap-2">
+                  <Activity size={20} className="text-blue-600 animate-pulse" />
+                  Nivel de Gravedad
                 </span>
-              </div>
+                <span className="flex items-center gap-1.5 shrink-0">
+                  <span className={cn(
+                    "w-2.5 h-2.5 rounded-full shadow-[0_0_8px_currentColor] transition-all duration-500",
+                    isOnline && supabaseConnected 
+                      ? "bg-emerald-500 text-emerald-500 animate-pulse" 
+                      : "bg-rose-500 text-rose-500"
+                  )} 
+                  title={isOnline && supabaseConnected ? "Conectado a Hosting y Supabase" : "Desconectado o Supabase sin configurar"}
+                  />
+                  <span className={cn(
+                    "text-[10px] font-black uppercase tracking-wider font-sans",
+                    isOnline && supabaseConnected ? "text-emerald-600" : "text-rose-500"
+                  )}>
+                    {isOnline && supabaseConnected ? 'Conectado' : 'Offline'}
+                  </span>
+                </span>
+              </h3>
             </div>
-
             {(() => {
               const currentLevel = currentTriage.level; // I, II, III, IV, V
-              const levelsInfo: Record<TriageLevel, { bg: string; border: string; text: string; name: string; targetMin: number; wait: string; complement: string; desc: string }> = {
+              const levelsInfo: Record<TriageLevel, { bg: string; text: string; name: string; wait: string; complement: string; desc: string }> = {
                 'I': { 
-                  bg: 'bg-red-50 text-red-600', 
-                  border: 'border-red-200',
+                  bg: 'bg-red-50/95 border border-red-200/60 text-red-600 shadow-sm', 
                   text: 'text-red-700', 
-                  name: 'CTAS I · Resucitación', 
-                  targetMin: 0,
-                  wait: 'Atención Inmediata',
+                  name: 'Nivel I · Resucitación', 
+                  wait: 'Atención inmediata',
                   complement: 'Reevaluación continua',
                   desc: 'Riesgo vital inminente. Requiere abordaje inmediato en Shock Room.'
                 },
                 'II': { 
-                  bg: 'bg-orange-50 text-orange-600', 
-                  border: 'border-orange-200',
+                  bg: 'bg-orange-50/95 border border-orange-200/60 text-orange-600 shadow-sm', 
                   text: 'text-orange-750', 
-                  name: 'CTAS II · Emergencia', 
-                  targetMin: 15,
-                  wait: 'Espera Máxima: 15 min',
-                  complement: 'Reevaluación cada 15 min',
+                  name: 'Nivel II · Emergencia', 
+                  wait: 'Tiempo de espera: ≤ 15 minutos',
+                  complement: 'Reevaluación cada 15 minutos',
                   desc: 'Inestabilidad hemodinámica sospechada o potencial. Box de Emergencias.'
                 },
                 'III': { 
-                  bg: 'bg-yellow-50 text-yellow-850', 
-                  border: 'border-yellow-200',
+                  bg: 'bg-yellow-50/60 border border-yellow-200/60 text-yellow-850 shadow-sm', 
                   text: 'text-yellow-800', 
-                  name: 'CTAS III · Urgente', 
-                  targetMin: 30,
-                  wait: 'Espera Máxima: 30 min',
-                  complement: 'Reevaluación cada 30 min',
+                  name: 'Nivel III · Urgente', 
+                  wait: 'Tiempo de espera: ≤ 30 minutos',
+                  complement: 'Reevaluación cada 30 minutos',
                   desc: 'Condición aguda estable con riesgo potencial. Consultorio de Urgencias.'
                 },
                 'IV': { 
-                  bg: 'bg-green-50 text-green-750', 
-                  border: 'border-green-200',
+                  bg: 'bg-green-50/80 border border-green-200/60 text-green-750 shadow-sm', 
                   text: 'text-green-700', 
-                  name: 'CTAS IV · Menos Urgente', 
-                  targetMin: 60,
-                  wait: 'Espera Máxima: 60 min',
-                  complement: 'Reevaluación cada 60 min',
+                  name: 'Nivel IV · Menos Urgente', 
+                  wait: 'Tiempo de espera: ≤ 60 minutos',
+                  complement: 'Reevaluación cada 60 minutos',
                   desc: 'Condiciones médicas generales estables. Consultorio General.'
                 },
                 'V': { 
-                  bg: 'bg-blue-50 text-blue-700', 
-                  border: 'border-blue-200',
+                  bg: 'bg-blue-50/80 border border-blue-200/60 text-blue-700 shadow-sm', 
                   text: 'text-blue-600', 
-                  name: 'CTAS V · No Urgente', 
-                  targetMin: 120,
-                  wait: 'Espera Máxima: 120 min',
-                  complement: 'Reevaluación cada 120 min',
-                  desc: 'Consulta ambulatoria de baja complejidad. Consulta Externa.'
+                  name: 'Nivel V · No Urgente', 
+                  wait: 'Tiempo de espera: ≤ 120 minutos',
+                  complement: 'Reevaluación cada 120 minutos',
+                  desc: 'Consulta ambulatoria de baja complejidad. Consulta Externa / Admisión.'
                 }
               };
 
               const active = levelsInfo[currentLevel] || levelsInfo['V'];
-              const urgencyAnimation = currentLevel === 'I' ? 'animate-ctas-critical' : currentLevel === 'II' ? 'animate-ctas-emergent' : '';
-              
-              // Calculate dynamic elapsed time in seconds/minutes
-              const arrivalTime = patient.arrivalDate ? new Date(patient.arrivalDate) : new Date();
-              const diffMs = Math.max(0, currentTime.getTime() - arrivalTime.getTime());
-              const diffSec = Math.floor(diffMs / 1000);
-              const elapsedMin = Math.floor(diffSec / 60);
-              const elapsedSecStr = String(diffSec % 60).padStart(2, '0');
-              const elapsedStr = `${elapsedMin}:${elapsedSecStr}`;
-              
-              // Determine if objective exceeded
-              const isTimeExceeded = active.targetMin > 0 && elapsedMin >= active.targetMin;
+              const urgencyAnimation = 
+                currentLevel === 'I' 
+                  ? 'animate-ctas-critical' 
+                  : currentLevel === 'II' 
+                  ? 'animate-ctas-emergent' 
+                  : '';
 
               return (
                 <div className="space-y-5">
-                  {/* Two-Column Grid: Gravity vs Elapsed Time */}
-                  <div className="grid grid-cols-2 gap-4">
-                    {/* Column 1: Gravity Indicator */}
-                    <div className={cn(
-                      "p-4 rounded-2xl border flex flex-col justify-between transition-all duration-300 min-h-[145px]",
-                      active.bg,
-                      active.border,
-                      urgencyAnimation
-                    )}>
-                      <div className="space-y-1">
-                        <span className="text-[9px] font-black tracking-widest uppercase text-slate-500 block">NIVEL</span>
-                        <div className="flex items-center gap-2">
-                          <span className="w-10 h-10 rounded-xl bg-white border border-black/10 flex items-center justify-center font-black text-xl font-mono shadow-sm">
-                            {currentLevel}
-                          </span>
-                          <span className="font-extrabold text-xs leading-tight text-slate-900 line-clamp-2">
-                            {active.name.split(' · ')[1]}
-                          </span>
-                        </div>
-                      </div>
-                      <div className="pt-2 border-t border-black/5 mt-2">
-                        <p className="text-[10px] font-black text-slate-500 uppercase">TIEMPO OBJETIVO</p>
-                        <p className="text-xs font-black text-slate-800 leading-none mt-1">{active.wait}</p>
-                      </div>
+                  {/* Real-time Giant Indicator */}
+                  <div className={cn(
+                    "p-5 rounded-[20px] border flex items-center gap-4 transition-all duration-350 shadow-sm", 
+                    active.bg,
+                    urgencyAnimation
+                  )}>
+                    <div className="w-20 h-20 rounded-full border-3 border-current flex items-center justify-center font-black text-4xl font-mono shrink-0 select-none shadow-md bg-white">
+                      {currentLevel}
                     </div>
-
-                    {/* Column 2: Elapsed Time Clock */}
-                    <div className={cn(
-                      "p-4 rounded-2xl border flex flex-col justify-between transition-all duration-300 min-h-[145px]",
-                      isTimeExceeded 
-                        ? "bg-rose-50 border-rose-300 shadow-md shadow-rose-100" 
-                        : "bg-slate-50 border-slate-200"
-                    )}>
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <span className="text-[9px] font-black tracking-widest uppercase text-slate-500">TRANSCURRIDO</span>
-                          <Clock size={12} className={cn(isTimeExceeded ? "text-rose-600 animate-spin" : "text-slate-400")} />
-                        </div>
-                        <div className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-slate-900">
-                          {elapsedStr}
-                        </div>
+                    <div className="min-w-0 flex-1 space-y-1 text-left">
+                      <div className="text-[10px] uppercase tracking-wide font-medium text-slate-500">
+                        CLASIFICACIÓN ACTUAL
                       </div>
-
-                      <div className="pt-2 border-t border-slate-200 mt-2">
-                        {isTimeExceeded ? (
-                          <div className="flex items-center gap-1 text-[9px] font-black uppercase text-red-700 animate-pulse bg-red-100 p-1.5 rounded-lg border border-red-200">
-                            <ShieldAlert size={12} className="shrink-0" />
-                            <span>¡ALERTA: TIEMPO EXCEDIDO!</span>
-                          </div>
-                        ) : (
-                          <div className="space-y-1">
-                            <div className="flex justify-between text-[9px] font-black text-slate-500">
-                              <span>PROGRESO</span>
-                              <span>{elapsedMin} / {active.targetMin || '∞'} MIN</span>
-                            </div>
-                            <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
-                              <div 
-                                className="bg-blue-600 h-1.5 rounded-full transition-all duration-500" 
-                                style={{ width: active.targetMin > 0 ? `${Math.min(100, (elapsedMin / active.targetMin) * 100)}%` : '100%' }}
-                              />
-                            </div>
-                          </div>
-                        )}
+                      <h4 className="text-base leading-snug font-semibold text-slate-900 whitespace-normal break-words">
+                        {active.name}
+                      </h4>
+                      <div className={cn("text-sm leading-snug font-medium flex items-center gap-1.5", active.text)}>
+                        <Clock size={14} className="shrink-0" />
+                        <span>{active.wait}</span>
+                      </div>
+                      <div className="text-xs leading-relaxed text-slate-600">
+                        {active.complement}
                       </div>
                     </div>
                   </div>
 
                   {/* Level dots representing the scale of gravity CTAS */}
-                  <div className="space-y-3 pt-1">
-                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Progreso / Escala de Gravedad CTAS:</div>
+                  <div className="space-y-3">
+                    <div className="text-xs font-black uppercase tracking-wider text-slate-500">Progreso / Escala CTAS:</div>
                     <div className="relative">
                       {/* Bar back */}
                       <div className="absolute top-[14px] left-3 right-3 h-0.5 bg-slate-100 -z-10" />
@@ -2059,7 +1904,7 @@ DESTINO SUGERIDO: ${triage.destination}
                   </div>
 
                   {/* Description Box */}
-                  <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl text-xs sm:text-sm text-slate-600 leading-relaxed font-semibold">
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-sm text-slate-600 leading-relaxed font-semibold">
                     {active.desc}
                   </div>
                 </div>
