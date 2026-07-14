@@ -29,6 +29,7 @@
   "exclude": [
     "node_modules",
     "respaldos_mixtos",
-    "respaldos_mixtos_backup"
+    "respaldos_mixtos_backup",
+    "src/respaldos_mixtos"
   ]
 }

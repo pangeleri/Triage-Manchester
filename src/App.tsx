@@ -226,11 +226,11 @@ export const CTASMatrix = ({
   );
 
   const criteriaByLevel: Record<CTASLevel, ClinicalCriterion[]> = {
-    1: validCriteria.filter((item) => item.level === 1),
-    2: validCriteria.filter((item) => item.level === 2),
-    3: validCriteria.filter((item) => item.level === 3),
-    4: validCriteria.filter((item) => item.level === 4),
-    5: validCriteria.filter((item) => item.level === 5),
+    1: validCriteria.filter((item) => item.level === 1).sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' })),
+    2: validCriteria.filter((item) => item.level === 2).sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' })),
+    3: validCriteria.filter((item) => item.level === 3).sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' })),
+    4: validCriteria.filter((item) => item.level === 4).sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' })),
+    5: validCriteria.filter((item) => item.level === 5).sort((a, b) => a.label.localeCompare(b.label, 'es', { sensitivity: 'base' })),
   };
 
   const ctasColumns = [
@@ -292,7 +292,10 @@ export default function App() {
   const [showFindingsAlert, setShowFindingsAlert] = useState(false);
   const [findingsAlertDismissed, setFindingsAlertDismissed] = useState(false);
   const [tepForcedRed, setTepForcedRed] = useState(false);
-  const [selectedSystemId, setSelectedSystemId] = useState('respiratorio');
+  const [selectedSystemId, setSelectedSystemId] = useState(() => {
+    const sorted = [...CLINICAL_SYSTEMS].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
+    return sorted[0]?.id || 'respiratorio';
+  });
 
   // Supabase Sync states
   const [dbSaving, setDbSaving] = useState(false);
@@ -863,50 +866,6 @@ DESTINO SUGERIDO: ${triage.destination}
                         <User size={28} />
                         <h2 className="text-2xl font-black tracking-tight">Identificación del Paciente Pediátrico <span className="text-red-500">*</span></h2>
                       </div>
-                      <span className="text-xs bg-rose-100 text-rose-800 px-3.5 py-1.5 rounded-full font-black uppercase tracking-wider">
-                        Solo Pediatría / Infantil
-                      </span>
-                    </div>
-
-                    {/* Botón de Registro Crítico / Bypass Directo */}
-                    <div className={cn(
-                      "p-5 rounded-2xl border-2 transition-all shadow-sm",
-                      patient.estadoOperativo === 'preliminar_critico'
-                        ? "bg-rose-50 border-rose-500 shadow-md shadow-rose-100 animate-pulse"
-                        : "bg-slate-50 border-slate-200"
-                    )}>
-                      <div className="flex items-start gap-4">
-                        <ShieldAlert className="text-rose-600 mt-1 shrink-0 animate-bounce" size={28} />
-                        <div className="space-y-1.5 flex-1">
-                          <h3 className="font-sans font-black text-slate-900 text-base sm:text-[17px] tracking-tight">
-                            🚨 Registro Crítico Inicial (Bypass de Triage)
-                          </h3>
-                          <p className="text-xs sm:text-sm text-slate-600 font-medium leading-relaxed">
-                            Active este modo si el paciente ingresa con riesgo de muerte inmediata o en paro. Bypasará la carga obligatoria de identificación y direccionará de forma inmediata al Shock Room (Sugerido CTAS I).
-                          </p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const isCrit = patient.estadoOperativo === 'preliminar_critico';
-                              setPatient({
-                                ...patient,
-                                name: isCrit ? '' : 'PACIENTE CRÍTICO PRELIMINAR',
-                                estadoOperativo: isCrit ? 'en_espera' : 'preliminar_critico',
-                                age: isCrit ? undefined : patient.age,
-                                documentId: isCrit ? '' : patient.documentId
-                              });
-                            }}
-                            className={cn(
-                              "px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wide transition-all border cursor-pointer mt-2",
-                              patient.estadoOperativo === 'preliminar_critico'
-                                ? "bg-rose-600 text-white border-rose-600 hover:bg-rose-700 shadow-sm"
-                                : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
-                            )}
-                          >
-                            {patient.estadoOperativo === 'preliminar_critico' ? '✓ Desactivar Modo Crítico' : '⚡ Activar Registro Crítico Directo'}
-                          </button>
-                        </div>
-                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -991,50 +950,6 @@ DESTINO SUGERIDO: ${triage.destination}
                       </div>
                     </div>
 
-                    {/* Datos del Acompañante */}
-                    <div className="mt-4 border-t border-slate-200/80 pt-6 space-y-4">
-                      <h3 className="font-extrabold text-slate-900 text-base flex items-center gap-2">
-                        <User size={18} className="text-blue-500" /> Datos del Acompañante (Opcional)
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        <div className="space-y-2">
-                          <label className="text-xs font-black uppercase text-slate-500">Nombre del acompañante</label>
-                          <input 
-                            type="text" 
-                            disabled={patient.estadoOperativo === 'preliminar_critico'}
-                            className="w-full p-3 rounded-lg border border-slate-200 outline-none font-semibold text-slate-800 text-sm disabled:bg-slate-100"
-                            placeholder="Ej. María Gómez"
-                            value={patient.nombreAcompanante || ''}
-                            onChange={e => setPatient({...patient, nombreAcompanante: e.target.value})}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-black uppercase text-slate-500">Teléfono</label>
-                          <input 
-                            type="text" 
-                            disabled={patient.estadoOperativo === 'preliminar_critico'}
-                            className="w-full p-3 rounded-lg border border-slate-200 outline-none font-semibold text-slate-800 text-sm disabled:bg-slate-100"
-                            placeholder="Ej. +54 9 11..."
-                            value={patient.telefonoAcompanante || ''}
-                            onChange={e => setPatient({...patient, telefonoAcompanante: e.target.value})}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <label className="text-xs font-black uppercase text-slate-500">Parentesco</label>
-                          <input 
-                            type="text" 
-                            disabled={patient.estadoOperativo === 'preliminar_critico'}
-                            className="w-full p-3 rounded-lg border border-slate-200 outline-none font-semibold text-slate-800 text-sm disabled:bg-slate-100"
-                            placeholder="Ej. Madre, Padre, Tutor"
-                            value={patient.parentescoAcompanante || ''}
-                            onChange={e => setPatient({...patient, parentescoAcompanante: e.target.value})}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                    <p className="text-xs font-bold text-slate-400 mt-2">
-                      * El triage está configurado exclusivamente para uso en pacientes pediátricos y lactantes.
-                    </p>
                   </motion.div>
                 )}
 
@@ -1291,9 +1206,6 @@ DESTINO SUGERIDO: ${triage.destination}
 
                       {/* Selector de Sistemas Clínicos para el Problema Principal - LISTA DESPLEGABLE */}
                       <div className="space-y-2 max-w-sm">
-                        <label htmlFor="clinical-system-select" className="text-xs font-black uppercase tracking-widest text-slate-450 block">
-                          Seleccionar Sistema Clínico CTAS:
-                        </label>
                         <div className="relative">
                           <select
                             id="clinical-system-select"
@@ -1301,7 +1213,7 @@ DESTINO SUGERIDO: ${triage.destination}
                             onChange={(e) => setSelectedSystemId(e.target.value)}
                             className="w-full bg-white text-slate-850 border border-slate-200 hover:border-slate-300 rounded-xl px-4 py-3 text-base font-black shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer pr-10"
                           >
-                            {CLINICAL_SYSTEMS.map(sys => (
+                            {[...CLINICAL_SYSTEMS].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })).map(sys => (
                               <option key={sys.id} value={sys.id}>
                                 {sys.name}
                               </option>
