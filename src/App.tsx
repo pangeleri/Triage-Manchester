@@ -172,10 +172,10 @@ export const ClinicalCriterionCard: React.FC<{
           {criterion.label}
         </p>
         <input 
-          type="checkbox" 
+          type="radio" 
           checked={selected} 
           readOnly 
-          className="mt-1 shrink-0 h-4 w-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 accent-blue-600 cursor-pointer" 
+          className="mt-1 shrink-0 h-4 w-4 text-blue-600 border-slate-300 rounded-full focus:ring-blue-500 accent-blue-600 cursor-pointer" 
         />
       </div>
     </div>
@@ -276,6 +276,7 @@ export default function App() {
   const [dbSaving, setDbSaving] = useState(false);
   const [dbSuccessMessage, setDbSuccessMessage] = useState<string | null>(null);
   const [dbErrorMessage, setDbErrorMessage] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const [supabaseConnected, setSupabaseConnected] = useState(false);
@@ -501,7 +502,7 @@ export default function App() {
       if (patient.estadoOperativo === 'preliminar_critico') {
         return !!patient.name;
       }
-      if (patient.age !== undefined && patient.age >= 18 && patient.ageUnit === 'años') {
+      if (patient.age !== undefined && patient.age >= 19 && patient.ageUnit === 'años') {
         return false;
       }
       return !!(patient.name && patient.age !== undefined && patient.documentId);
@@ -556,6 +557,14 @@ export default function App() {
   };
 
   const finalizeTriage = async () => {
+    if (patient.estadoOperativo !== 'preliminar_critico') {
+      if (!patient.findings || patient.findings.length !== 1) {
+        setValidationError("Debe seleccionar un problema principal / discriminador clínico antes de cerrar el triaje.");
+        return;
+      }
+    }
+
+    setValidationError(null);
     const ageMonths = (patient.age || 0) * (patient.ageUnit === 'años' ? 12 : 1);
     
     // Set clinical target goals in minutes and timestamps
@@ -590,6 +599,7 @@ export default function App() {
     setShowAlertModal(false);
     setShowFindingsAlert(false);
     setFindingsAlertDismissed(false);
+    setValidationError(null);
 
     // Save to Supabase in background if configured
     if (isSupabaseConfigured) {
@@ -929,7 +939,7 @@ DESTINO SUGERIDO: ${triage.destination}
                               if (isNaN(val)) return;
                               if (val < 0) val = 0;
 
-                              if (val >= 18 && patient.ageUnit === 'años') {
+                              if (val >= 19 && patient.ageUnit === 'años') {
                                 setShowAgeWarningModal(true);
                               }
                               setPatient({...patient, age: val});
@@ -944,7 +954,7 @@ DESTINO SUGERIDO: ${triage.destination}
                             value={patient.ageUnit}
                             onChange={e => {
                               const unit = e.target.value as any;
-                              if (patient.age !== undefined && patient.age >= 18 && unit === 'años') {
+                              if (patient.age !== undefined && patient.age >= 19 && unit === 'años') {
                                 setShowAgeWarningModal(true);
                               }
                               setPatient({...patient, ageUnit: unit});
@@ -1091,9 +1101,6 @@ DESTINO SUGERIDO: ${triage.destination}
                                             secObj[k] = false;
                                           });
                                           (nextTep as any)[secKey] = secObj;
-                                          setShowSpecifics(prev => ({ ...prev, [section.key]: false }));
-                                        } else {
-                                          setShowSpecifics(prev => ({ ...prev, [section.key]: true }));
                                         }
 
                                         setPatient({ ...patient, tepStates: nextStates, tep: nextTep });
@@ -1115,74 +1122,41 @@ DESTINO SUGERIDO: ${triage.destination}
                                 ))}
                               </div>
 
-                              {/* Opción visible de "Marcar hallazgos específicos" */}
-                              <div className="mt-4 pt-4 border-t border-slate-200">
-                                <label className={cn(
-                                  "flex items-center gap-2.5 text-xs font-bold p-2.5 rounded-xl border transition-all cursor-pointer select-none w-full",
-                                  showSpecifics[section.key] 
-                                    ? "bg-rose-100/70 border-rose-300 text-rose-900 shadow-sm font-extrabold" 
-                                    : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
-                                )}>
-                                  <input
-                                    type="checkbox"
-                                    className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
-                                    checked={showSpecifics[section.key]}
-                                    onChange={(e) => {
-                                      const isChecked = e.target.checked;
-                                      setShowSpecifics(prev => ({
-                                        ...prev,
-                                        [section.key]: isChecked
-                                      }));
-                                      if (isChecked) {
-                                        const nextStates = { ...patient.tepStates!, [section.key]: 'alterado' as any };
-                                        setPatient(p => ({ ...p, tepStates: nextStates }));
-                                      } else {
-                                        const nextStates = { ...patient.tepStates!, [section.key]: 'no_evaluado' as any };
-                                        const nextTep = { ...patient.tep! };
-                                        const secKey = section.tepKey;
-                                        const secObj = { ...(nextTep as any)[secKey] };
-                                        Object.keys(secObj).forEach(k => {
-                                          secObj[k] = false;
-                                        });
-                                        (nextTep as any)[secKey] = secObj;
-                                        setPatient(p => ({ ...p, tepStates: nextStates, tep: nextTep }));
-                                      }
-                                    }}
-                                  />
-                                  <span>Marcar hallazgos específicos</span>
-                                </label>
-                              </div>
-
-                              {/* Detalles si el estado es alterado */}
-                              {showSpecifics[section.key] && (
-                                <div className="space-y-1.5 mt-3 bg-white/65 p-3 rounded-xl border border-rose-150 shadow-inner">
-                                  {section.options.map(opt => {
-                                    const isChecked = !!(patient.tep as any)[section.tepKey][opt.k];
-                                    return (
-                                      <label key={opt.k} className={cn(
-                                        "flex items-center gap-2.5 text-xs cursor-pointer p-2 rounded-lg transition-all border border-transparent select-none",
-                                        isChecked ? "bg-rose-100 text-rose-950 border-rose-200 font-bold" : "hover:bg-slate-100 text-slate-700"
-                                      )}>
-                                        <input 
-                                          type="checkbox" 
-                                          className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
-                                          checked={isChecked}
-                                          onChange={() => {
-                                            const nextTep = { ...patient.tep! };
-                                            const secKey = section.tepKey;
-                                            const secObj = { ...(nextTep as any)[secKey] };
-                                            secObj[opt.k] = !secObj[opt.k];
-                                            secObj.normal = false;
-                                            (nextTep as any)[secKey] = secObj;
-                                            
-                                            const nextStates = { ...patient.tepStates!, [section.key]: 'alterado' as any };
-                                            setPatient(p => ({ ...p, tep: nextTep, tepStates: nextStates }));
-                                          }}
-                                        />
-                                        <span className="leading-snug">{opt.l}</span>
-                                      </label>
-                                    );
-                                  })}
+                              {/* Detalles si el estado es alterado - se muestra directamente */}
+                              {currentStatus === 'alterado' && (
+                                <div className="space-y-1.5 mt-4 pt-4 border-t border-slate-200">
+                                  <div className="text-[10px] font-black uppercase text-rose-800 tracking-wider mb-2">
+                                    Hallazgos específicos:
+                                  </div>
+                                  <div className="space-y-1.5 bg-white/65 p-3 rounded-xl border border-rose-150 shadow-inner">
+                                    {section.options.map(opt => {
+                                      const isChecked = !!(patient.tep as any)[section.tepKey][opt.k];
+                                      return (
+                                        <label key={opt.k} className={cn(
+                                          "flex items-center gap-2.5 text-xs cursor-pointer p-2 rounded-lg transition-all border border-transparent select-none",
+                                          isChecked ? "bg-rose-100 text-rose-950 border-rose-200 font-bold" : "hover:bg-slate-100 text-slate-700"
+                                        )}>
+                                          <input 
+                                            type="checkbox" 
+                                            className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                                            checked={isChecked}
+                                            onChange={() => {
+                                              const nextTep = { ...patient.tep! };
+                                              const secKey = section.tepKey;
+                                              const secObj = { ...(nextTep as any)[secKey] };
+                                              secObj[opt.k] = !secObj[opt.k];
+                                              secObj.normal = false;
+                                              (nextTep as any)[secKey] = secObj;
+                                              
+                                              const nextStates = { ...patient.tepStates!, [section.key]: 'alterado' as any };
+                                              setPatient(p => ({ ...p, tep: nextTep, tepStates: nextStates }));
+                                            }}
+                                          />
+                                          <span className="leading-snug">{opt.l}</span>
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
                                 </div>
                               )}
                             </div>
@@ -1207,9 +1181,9 @@ DESTINO SUGERIDO: ${triage.destination}
                   const onToggleCriterion = (criterionId: string) => {
                     const current = patient.findings || [];
                     const isSelected = current.includes(criterionId);
-                    const next = isSelected 
-                      ? current.filter(f => f !== criterionId)
-                      : [...current, criterionId];
+                    // Exclusive single selection: if already selected, clear it.
+                    // If a different one is selected, replace it. Max array size is 1.
+                    const next = isSelected ? [] : [criterionId];
                     setPatient({ ...patient, findings: next });
                   };
 
@@ -1237,7 +1211,11 @@ DESTINO SUGERIDO: ${triage.destination}
                           <select
                             id="clinical-system-select"
                             value={selectedSystemId}
-                            onChange={(e) => setSelectedSystemId(e.target.value)}
+                            onChange={(e) => {
+                              setSelectedSystemId(e.target.value);
+                              // Clear active discriminator on category change
+                              setPatient({ ...patient, findings: [] });
+                            }}
                             className="w-full bg-white text-slate-850 border border-slate-200 hover:border-slate-300 rounded-xl px-4 py-3 text-base font-black shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer pr-10"
                           >
                             {[...CLINICAL_SYSTEMS].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })).map(sys => (
@@ -1499,6 +1477,13 @@ DESTINO SUGERIDO: ${triage.destination}
                   </motion.div>
                 )}
               </AnimatePresence>
+
+              {validationError && (
+                <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-800 rounded-xl font-bold flex items-center gap-3">
+                  <AlertCircle size={22} className="text-red-600 shrink-0" />
+                  <span className="text-sm font-semibold">{validationError}</span>
+                </div>
+              )}
 
               {/* Navigation Buttons */}
               <div className="flex justify-between mt-12 pt-8 border-t border-slate-150">
