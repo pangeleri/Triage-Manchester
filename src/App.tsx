@@ -38,30 +38,6 @@ import { getVitalsRange, getVitalsDSLabel, getTepLadosAlterados, getTepLadosList
 
 // --- Constants & Helpers ---
 
-const GCS_OPTIONS = {
-  eye: [
-    { value: 4, label: 'Espontánea' },
-    { value: 3, label: 'Al estímulo verbal' },
-    { value: 2, label: 'Al dolor' },
-    { value: 1, label: 'Sin respuesta' },
-  ],
-  verbal: [
-    { value: 5, label: 'Orientado' },
-    { value: 4, label: 'Confuso' },
-    { value: 3, label: 'Palabras inapropiadas' },
-    { value: 2, label: 'Sonidos incomprensibles' },
-    { value: 1, label: 'Sin respuesta' },
-  ],
-  motor: [
-    { value: 6, label: 'Obedece órdenes' },
-    { value: 5, label: 'Localiza el dolor' },
-    { value: 4, label: 'Retirada al dolor' },
-    { value: 3, label: 'Flexión anormal (decorticación)' },
-    { value: 2, label: 'Extensión anormal (descerebración)' },
-    { value: 1, label: 'Sin respuesta' },
-  ],
-};
-
 const INITIAL_VITALS: VitalSigns = {
   heartRate: undefined,
   respiratoryRate: undefined,
@@ -69,11 +45,8 @@ const INITIAL_VITALS: VitalSigns = {
   diastolicBP: undefined,
   oxygenSaturation: undefined,
   temperature: undefined,
-  glasgow: 15,
   glucose: undefined,
-  painScale: 'EVA',
-  painScore: 0,
-  avdi: 'A',
+  avpu: 'A',
   condicionMedicionSpo2: 'aire_ambiente',
   metodoTemperatura: 'axilar',
 };
@@ -284,14 +257,16 @@ export default function App() {
   const [history, setHistory] = useState<PatientData[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
   
-  const [showGlasgowCalc, setShowGlasgowCalc] = useState(false);
-  const [gcsComponents, setGcsComponents] = useState({ eye: 4, verbal: 5, motor: 6 });
-  const [gcsTouched, setGcsTouched] = useState({ eye: false, verbal: false, motor: false });
-
   const [showAlertModal, setShowAlertModal] = useState(false);
+  const [showAgeWarningModal, setShowAgeWarningModal] = useState(false);
   const [showFindingsAlert, setShowFindingsAlert] = useState(false);
   const [findingsAlertDismissed, setFindingsAlertDismissed] = useState(false);
-  const [tepForcedRed, setTepForcedRed] = useState(false);
+  const [showSpecifics, setShowSpecifics] = useState<Record<string, boolean>>({
+    apariencia: false,
+    respiracion: false,
+    circulacion: false
+  });
+  const [tepAlertDismissed, setTepAlertDismissed] = useState(false);
   const [selectedSystemId, setSelectedSystemId] = useState(() => {
     const sorted = [...CLINICAL_SYSTEMS].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
     return sorted[0]?.id || 'respiratorio';
@@ -479,7 +454,43 @@ export default function App() {
 
   // --- Logic Functions ---
 
-  const currentTriage = useMemo(() => calculateTriage(patient, tepForcedRed), [patient, tepForcedRed]);
+  const currentTriage = useMemo(() => calculateTriage(patient), [patient]);
+
+  // Synchronize showSpecifics with patient.tepStates
+  useEffect(() => {
+    if (patient.tepStates) {
+      const isAp = patient.tepStates.apariencia === 'alterado';
+      const isRe = patient.tepStates.respiracion === 'alterado';
+      const isCi = patient.tepStates.circulacion === 'alterado';
+      setShowSpecifics(prev => {
+        if (prev.apariencia === isAp && prev.respiracion === isRe && prev.circulacion === isCi) {
+          return prev;
+        }
+        return { apariencia: isAp, respiracion: isRe, circulacion: isCi };
+      });
+    }
+  }, [patient.tepStates?.apariencia, patient.tepStates?.respiracion, patient.tepStates?.circulacion]);
+
+  // Trigger TEP alert modal when 2 or 3 components are altered
+  const alteredTepCount = useMemo(() => {
+    if (!patient.tepStates) return 0;
+    const { apariencia, respiracion, circulacion } = patient.tepStates;
+    let count = 0;
+    if (apariencia === 'alterado') count++;
+    if (respiracion === 'alterado') count++;
+    if (circulacion === 'alterado') count++;
+    return count;
+  }, [patient.tepStates]);
+
+  useEffect(() => {
+    if (alteredTepCount >= 2) {
+      if (!tepAlertDismissed && !showAlertModal) {
+        setShowAlertModal(true);
+      }
+    } else {
+      setTepAlertDismissed(false);
+    }
+  }, [alteredTepCount, tepAlertDismissed, showAlertModal]);
 
   const getVitalsRequirements = () => {
     return getVitalsRequirementsByLevel(currentTriage.level);
@@ -489,6 +500,9 @@ export default function App() {
     if (step === 1) {
       if (patient.estadoOperativo === 'preliminar_critico') {
         return !!patient.name;
+      }
+      if (patient.age !== undefined && patient.age >= 18 && patient.ageUnit === 'años') {
+        return false;
       }
       return !!(patient.name && patient.age !== undefined && patient.documentId);
     }
@@ -513,7 +527,6 @@ export default function App() {
       if (reqs.diastolicBP && !hasValue(v.diastolicBP)) return false;
       if (reqs.oxygenSaturation && !hasValue(v.oxygenSaturation)) return false;
       if (reqs.temperature && !hasValue(v.temperature)) return false;
-      if (reqs.glasgow && !hasValue(v.glasgow)) return false;
       if (reqs.glucose && !hasValue(v.glucose)) return false;
       
       return true;
@@ -572,9 +585,8 @@ export default function App() {
     localStorage.setItem('triage_history', JSON.stringify(updatedHistory));
 
     setPatient(INITIAL_PATIENT);
-    setGcsComponents({ eye: 4, verbal: 5, motor: 6 });
     setStep(1);
-    setTepForcedRed(false);
+    setTepAlertDismissed(false);
     setShowAlertModal(false);
     setShowFindingsAlert(false);
     setFindingsAlertDismissed(false);
@@ -659,7 +671,7 @@ export default function App() {
         ['Presión Arterial', `${p.vitals.systolicBP ?? 'N/A'}/${p.vitals.diastolicBP ?? 'N/A'} mmHg`],
         ['Saturación O2', `${p.vitals.oxygenSaturation ?? 'N/A'}%`],
         ['Temperatura', `${p.vitals.temperature ?? 'N/A'}°C`],
-        ['Escala de Glasgow', `${p.vitals.glasgow ?? 'N/A'}/15`],
+        ['Clasificación AVPU', p.vitals.avpu ?? 'N/A'],
       ],
     });
 
@@ -707,7 +719,7 @@ export default function App() {
       'PA (mmHg)',
       'Saturación O2 (%)',
       'Temperatura (°C)',
-      'Glasgow',
+      'Neurológico AVPU',
       'Hallazgos',
       'Otros Síntomas',
       'Destino Sugerido',
@@ -739,7 +751,7 @@ export default function App() {
         paStr,
         p.vitals.oxygenSaturation ?? '',
         p.vitals.temperature ?? '',
-        p.vitals.glasgow ?? '',
+        p.vitals.avpu ?? '',
         findingsStr,
         p.otherSymptoms ?? '',
         p.suggestedDestination ?? '',
@@ -785,7 +797,7 @@ NIVEL DE GRAVEDAD: ${triage.level} (${triage.priority})
 DOCUMENTO: ${p.documentId || '---'}
 SIGNOS VITALES: FC: ${p.vitals?.heartRate ?? '---'} lpm, FR: ${p.vitals?.respiratoryRate ?? '---'} rpm, PA: ${p.vitals?.systolicBP ?? '---'}/${p.vitals?.diastolicBP ?? '---'} mmHg, SpO2: ${p.vitals?.oxygenSaturation ?? '---'}%, T°: ${p.vitals?.temperature ?? '---'}°C${tepDetails}
 PROBLEMA PRINCIPAL: ${(Array.isArray(p.findings) ? p.findings.join(', ') : (typeof p.findings === 'string' ? p.findings : '')) || 'Sin hallazgos específicos'}${p.otherSymptoms ? ` (${p.otherSymptoms})` : ''}
-ESCALA DE GLASGOW: ${p.vitals?.glasgow ?? '---'}/15
+CLASIFICACIÓN NEUROLÓGICA AVPU: ${p.vitals?.avpu ?? '---'}
 DESTINO SUGERIDO: ${triage.destination}
     `.trim();
   };
@@ -908,7 +920,18 @@ DESTINO SUGERIDO: ${triage.destination}
                             placeholder={patient.estadoOperativo === 'preliminar_critico' ? "N/A" : "Ej. 5"}
                             value={patient.age ?? ''}
                             onChange={e => {
-                              const val = e.target.value ? parseInt(e.target.value) : undefined;
+                              const inputVal = e.target.value;
+                              if (inputVal === '') {
+                                setPatient({...patient, age: undefined});
+                                return;
+                              }
+                              let val = parseInt(inputVal);
+                              if (isNaN(val)) return;
+                              if (val < 0) val = 0;
+
+                              if (val >= 18 && patient.ageUnit === 'años') {
+                                setShowAgeWarningModal(true);
+                              }
                               setPatient({...patient, age: val});
                             }}
                           />
@@ -921,6 +944,9 @@ DESTINO SUGERIDO: ${triage.destination}
                             value={patient.ageUnit}
                             onChange={e => {
                               const unit = e.target.value as any;
+                              if (patient.age !== undefined && patient.age >= 18 && unit === 'años') {
+                                setShowAgeWarningModal(true);
+                              }
                               setPatient({...patient, ageUnit: unit});
                             }}
                           >
@@ -974,47 +1000,6 @@ DESTINO SUGERIDO: ${triage.destination}
                     <p className="text-base text-slate-600 font-medium leading-relaxed">
                       Evalúe cada lado del triángulo de forma independiente seleccionando su estado clínico y detallando hallazgos si está alterado:
                     </p>
-
-                    {/* Panel de Decisiones Clínicas de Bypass Crítico Manual */}
-                    <div className={cn(
-                      "p-5 rounded-2xl border-2 transition-all shadow-sm",
-                      tepForcedRed ? "bg-red-50 border-red-500 shadow-md shadow-red-100" : "bg-slate-50 border-slate-200"
-                    )}>
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-3 pb-2 border-b border-slate-200">
-                        <div className="flex items-center gap-2">
-                          <ShieldAlert size={24} className="text-red-600" />
-                          <h3 className="font-sans font-black text-slate-900 text-base sm:text-lg">
-                            Bypass Crítico por Criterio Clínico Explícito
-                          </h3>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setTepForcedRed(!tepForcedRed)}
-                          className={cn(
-                            "px-4 py-1.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all border cursor-pointer",
-                            tepForcedRed 
-                              ? "bg-red-600 text-white border-red-600 hover:bg-red-700" 
-                              : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
-                          )}
-                        >
-                          {tepForcedRed ? '✓ Bypass Manual Activo (CTAS I)' : '⚡ Forzar Bypass CTAS I'}
-                        </button>
-                      </div>
-                      
-                      <div className="space-y-3">
-                        <p className="text-xs font-bold text-slate-500">
-                          Banderas rojas que justifican bypass crítico inmediato por criterio del profesional:
-                        </p>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 text-xs font-semibold text-slate-700">
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Apnea o respiración agónica</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Ausencia total de respuesta (Coma)</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Shock evidente / mala perfusión</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Convulsión activa prolongada</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Cianosis central con compromiso clínico</span>
-                          <span className="flex items-center gap-1.5"><span className="text-red-500 font-bold">•</span> Obstrucción grave de vía aérea</span>
-                        </div>
-                      </div>
-                    </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       {[
@@ -1106,6 +1091,9 @@ DESTINO SUGERIDO: ${triage.destination}
                                             secObj[k] = false;
                                           });
                                           (nextTep as any)[secKey] = secObj;
+                                          setShowSpecifics(prev => ({ ...prev, [section.key]: false }));
+                                        } else {
+                                          setShowSpecifics(prev => ({ ...prev, [section.key]: true }));
                                         }
 
                                         setPatient({ ...patient, tepStates: nextStates, tep: nextTep });
@@ -1127,10 +1115,47 @@ DESTINO SUGERIDO: ${triage.destination}
                                 ))}
                               </div>
 
+                              {/* Opción visible de "Marcar hallazgos específicos" */}
+                              <div className="mt-4 pt-4 border-t border-slate-200">
+                                <label className={cn(
+                                  "flex items-center gap-2.5 text-xs font-bold p-2.5 rounded-xl border transition-all cursor-pointer select-none w-full",
+                                  showSpecifics[section.key] 
+                                    ? "bg-rose-100/70 border-rose-300 text-rose-900 shadow-sm font-extrabold" 
+                                    : "bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100"
+                                )}>
+                                  <input
+                                    type="checkbox"
+                                    className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                                    checked={showSpecifics[section.key]}
+                                    onChange={(e) => {
+                                      const isChecked = e.target.checked;
+                                      setShowSpecifics(prev => ({
+                                        ...prev,
+                                        [section.key]: isChecked
+                                      }));
+                                      if (isChecked) {
+                                        const nextStates = { ...patient.tepStates!, [section.key]: 'alterado' as any };
+                                        setPatient(p => ({ ...p, tepStates: nextStates }));
+                                      } else {
+                                        const nextStates = { ...patient.tepStates!, [section.key]: 'no_evaluado' as any };
+                                        const nextTep = { ...patient.tep! };
+                                        const secKey = section.tepKey;
+                                        const secObj = { ...(nextTep as any)[secKey] };
+                                        Object.keys(secObj).forEach(k => {
+                                          secObj[k] = false;
+                                        });
+                                        (nextTep as any)[secKey] = secObj;
+                                        setPatient(p => ({ ...p, tepStates: nextStates, tep: nextTep }));
+                                      }
+                                    }}
+                                  />
+                                  <span>Marcar hallazgos específicos</span>
+                                </label>
+                              </div>
+
                               {/* Detalles si el estado es alterado */}
-                              {currentStatus === 'alterado' && (
-                                <div className="space-y-2 mt-2 bg-white/65 p-3 rounded-xl border border-rose-150 shadow-inner">
-                                  <p className="text-[10px] font-black uppercase text-rose-800 tracking-wider mb-2">Marcar hallazgos específicos:</p>
+                              {showSpecifics[section.key] && (
+                                <div className="space-y-1.5 mt-3 bg-white/65 p-3 rounded-xl border border-rose-150 shadow-inner">
                                   {section.options.map(opt => {
                                     const isChecked = !!(patient.tep as any)[section.tepKey][opt.k];
                                     return (
@@ -1149,7 +1174,9 @@ DESTINO SUGERIDO: ${triage.destination}
                                             secObj[opt.k] = !secObj[opt.k];
                                             secObj.normal = false;
                                             (nextTep as any)[secKey] = secObj;
-                                            setPatient({ ...patient, tep: nextTep });
+                                            
+                                            const nextStates = { ...patient.tepStates!, [section.key]: 'alterado' as any };
+                                            setPatient(p => ({ ...p, tep: nextTep, tepStates: nextStates }));
                                           }}
                                         />
                                         <span className="leading-snug">{opt.l}</span>
@@ -1299,7 +1326,7 @@ DESTINO SUGERIDO: ${triage.destination}
                                 <label className="text-[11px] md:text-xs font-black text-slate-650 flex items-center justify-between gap-1.5 uppercase tracking-wide">
                                   <span className="flex items-center gap-1.5">{v.icon} {v.label} {isRequired ? <span className="text-red-500 font-black">*</span> : <span className="text-slate-400 font-medium text-[10px] lowercase">(opcional)</span>}</span>
                                   {dsInfo && patient.vitals?.[v.key as keyof VitalSigns] !== undefined && (
-                                    <span className={cn("text-[9px] font-black uppercase px-2 py-0.5 rounded-full border shadow-xs animate-pulse", dsInfo.colorClass)}>
+                                    <span className={cn("text-[11px] font-black uppercase px-2.5 py-1 rounded-full border shadow-xs animate-pulse", dsInfo.colorClass)}>
                                       {dsInfo.label}
                                     </span>
                                   )}
@@ -1319,331 +1346,93 @@ DESTINO SUGERIDO: ${triage.destination}
                                   }}
                                 />
                               </div>
-
-                              {/* Condiciones de SpO2 */}
-                              {v.key === 'oxygenSaturation' && (
-                                <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex gap-2 w-full">
-                                  {[
-                                    { value: 'aire_ambiente', label: 'Aire Amb.' },
-                                    { value: 'oxigeno_suplementario', label: 'O2 Supl.' }
-                                  ].map(opt => (
-                                    <button
-                                      key={opt.value}
-                                      type="button"
-                                      onClick={() => setPatient({
-                                        ...patient,
-                                        vitals: { ...patient.vitals!, condicionMedicionSpo2: opt.value }
-                                      })}
-                                      className={cn(
-                                        "flex-1 py-1 px-1 rounded-lg text-[9px] font-black border transition-all cursor-pointer select-none",
-                                        patient.vitals?.condicionMedicionSpo2 === opt.value
-                                          ? "bg-blue-600 border-transparent text-white shadow-sm"
-                                          : "bg-white border-slate-250 text-slate-500 hover:bg-slate-100"
-                                      )}
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-
-                              {/* Método de temperatura */}
-                              {v.key === 'temperature' && (
-                                <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex gap-1.5 w-full">
-                                  {[
-                                    { value: 'axilar', label: 'Axilar' },
-                                    { value: 'rectal', label: 'Rectal' },
-                                    { value: 'timpanica', label: 'Timp.' }
-                                  ].map(opt => (
-                                    <button
-                                      key={opt.value}
-                                      type="button"
-                                      onClick={() => setPatient({
-                                        ...patient,
-                                        vitals: { ...patient.vitals!, metodoTemperatura: opt.value }
-                                      })}
-                                      className={cn(
-                                        "flex-1 py-1 px-1 rounded-lg text-[9px] font-black border transition-all cursor-pointer select-none",
-                                        patient.vitals?.metodoTemperatura === opt.value
-                                          ? "bg-blue-600 border-transparent text-white shadow-sm"
-                                          : "bg-white border-slate-250 text-slate-500 hover:bg-slate-100"
-                                      )}
-                                    >
-                                      {opt.label}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
                             </div>
                           );
                         });
                       })()}
                     </div>
 
-                    {/* Panel de Evaluación de Dolor (EVA) y Estado Neurológico AVDI */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-6">
-                      {/* DOLOR (EVA) */}
-                      <div className="p-5 border border-slate-200 rounded-2xl bg-white space-y-4 shadow-sm flex flex-col justify-between">
-                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                          <div className="flex items-center gap-2">
-                            <Activity size={18} className="text-rose-600" />
-                            <h3 className="font-extrabold text-slate-900 text-sm md:text-base">Evaluación del Dolor (Escala EVA)</h3>
-                          </div>
-                          <span className="text-[10px] font-black text-rose-700 bg-rose-50 px-2.5 py-0.5 rounded-full border border-rose-100 uppercase font-mono">
-                            {patient.vitals?.painScore !== undefined 
-                              ? (patient.vitals.painScore === 0 ? 'Sin Dolor' : 
-                                 patient.vitals.painScore <= 3 ? 'Leve' : 
-                                 patient.vitals.painScore <= 7 ? 'Moderado' : 'Severo')
-                              : 'No evaluado'}
-                          </span>
+                    {/* Clasificación neurológica AVPU */}
+                    <div className="p-6 border border-slate-200 rounded-3xl bg-white space-y-6 shadow-sm mt-6">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                        <div className="flex items-center gap-2.5">
+                          <ShieldAlert size={20} className="text-purple-600" />
+                          <h3 className="font-extrabold text-slate-900 text-base md:text-lg">Clasificación neurológica AVPU</h3>
                         </div>
-                        <div className="space-y-2">
-                          <div className="flex justify-between items-center text-xs font-bold text-slate-500">
-                            <span>Sin dolor (0)</span>
-                            <span className="text-sm font-black text-slate-800">{patient.vitals?.painScore ?? 0} / 10</span>
-                            <span>Dolor máximo (10)</span>
-                          </div>
-                          <input
-                            type="range"
-                            min="0"
-                            max="10"
-                            step="1"
-                            value={patient.vitals?.painScore ?? 0}
-                            onChange={e => setPatient({
-                              ...patient,
-                              vitals: { ...patient.vitals!, painScore: parseInt(e.target.value), painScale: 'EVA' }
-                            })}
-                            className="w-full h-2 bg-slate-100 rounded-lg appearance-none cursor-pointer accent-rose-600 border border-slate-200"
-                          />
-                        </div>
+                        <span className="text-[10px] font-black text-purple-700 bg-purple-50 px-3 py-1 rounded-full border border-purple-100 uppercase font-mono">
+                          {patient.vitals?.avpu === 'A' ? 'Alerta' :
+                           patient.vitals?.avpu === 'V' ? 'Verbal' :
+                           patient.vitals?.avpu === 'P' ? 'Dolor' :
+                           patient.vitals?.avpu === 'U' ? 'Inconsciente' : 'Sin evaluar'}
+                        </span>
                       </div>
 
-                      {/* NEUROLÓGICO (AVDI) */}
-                      <div className="p-5 border border-slate-200 rounded-2xl bg-white space-y-4 shadow-sm flex flex-col justify-between">
-                        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                          <div className="flex items-center gap-2">
-                            <ShieldAlert size={18} className="text-purple-600" />
-                            <h3 className="font-extrabold text-slate-900 text-sm md:text-base">Clasificación Neurológica AVDI</h3>
-                          </div>
-                          <span className="text-[10px] font-black text-purple-700 bg-purple-50 px-2.5 py-0.5 rounded-full border border-purple-100 uppercase font-mono">
-                            {patient.vitals?.avdi === 'A' ? 'Alerta' :
-                             patient.vitals?.avdi === 'V' ? 'Voz' :
-                             patient.vitals?.avdi === 'D' ? 'Dolor' :
-                             patient.vitals?.avdi === 'I' ? 'Inconsciente' : 'Sin evaluar'}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-4 gap-1.5">
-                          {[
-                            { value: 'A', label: 'Alerta (A)' },
-                            { value: 'V', label: 'Voz (V)' },
-                            { value: 'D', label: 'Dolor (D)' },
-                            { value: 'I', label: 'Inconsciente (I)' }
-                          ].map(opt => (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {[
+                          {
+                            value: 'A',
+                            letter: 'A',
+                            name: 'Alerta',
+                            desc: 'El paciente está despierto, consciente del entorno, responde espontáneamente y mantiene una conversación.'
+                          },
+                          {
+                            value: 'V',
+                            letter: 'V',
+                            name: 'Verbal',
+                            desc: 'El paciente no está completamente despierto, pero abre los ojos, habla o se mueve al hablarle o pedirle que lo haga.'
+                          },
+                          {
+                            value: 'P',
+                            letter: 'P',
+                            name: 'Dolor',
+                            desc: 'No responde a estímulos verbales, pero reacciona —gime, se mueve o retira— ante un estímulo doloroso, como un pellizco.'
+                          },
+                          {
+                            value: 'U',
+                            letter: 'U',
+                            name: 'Inconsciente',
+                            desc: 'No muestra ningún tipo de respuesta, ni verbal ni motora, ante ningún estímulo.'
+                          }
+                        ].map(opt => {
+                          const isSelected = patient.vitals?.avpu === opt.value;
+                          return (
                             <button
                               key={opt.value}
                               type="button"
                               onClick={() => setPatient({
                                 ...patient,
-                                vitals: { ...patient.vitals!, avdi: opt.value }
+                                vitals: { ...patient.vitals!, avpu: opt.value }
                               })}
                               className={cn(
-                                "py-2.5 rounded-xl border font-black text-xs transition-all cursor-pointer shadow-sm text-center select-none",
-                                patient.vitals?.avdi === opt.value
-                                  ? "bg-purple-600 border-transparent text-white font-black"
-                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                                "p-4 rounded-2xl border text-left transition-all cursor-pointer shadow-sm flex flex-col justify-between space-y-3 relative overflow-hidden group select-none hover:border-purple-300",
+                                isSelected
+                                  ? "bg-purple-50 border-purple-400 ring-2 ring-purple-600/20"
+                                  : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50/50"
                               )}
                             >
-                              {opt.label}
+                              <div className="flex items-center justify-between w-full">
+                                <span className={cn(
+                                  "w-9 h-9 rounded-xl flex items-center justify-center font-black text-base transition-all",
+                                  isSelected ? "bg-purple-600 text-white shadow-sm shadow-purple-500/20" : "bg-purple-50 text-purple-600"
+                                )}>
+                                  {opt.letter}
+                                </span>
+                                <span className={cn(
+                                  "text-xs font-black uppercase tracking-wider",
+                                  isSelected ? "text-purple-700" : "text-slate-400"
+                                )}>
+                                  {opt.name}
+                                </span>
+                              </div>
+                              <p className={cn(
+                                "text-xs leading-relaxed font-medium",
+                                isSelected ? "text-purple-950 font-semibold" : "text-slate-500"
+                              )}>
+                                {opt.desc}
+                              </p>
                             </button>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Escala de Coma de Glasgow Separada y Profesional */}
-                    <div className="mt-8 border border-slate-200/80 rounded-3xl bg-white p-6 space-y-6 shadow-sm">
-                      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-100 pb-4">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <FileText size={20} className="text-blue-600" />
-                            <h3 className="font-extrabold text-slate-900 text-lg sm:text-xl flex items-center gap-1">
-                              Escala de Coma de Glasgow {getVitalsRequirements().glasgow ? <span className="text-red-500">*</span> : <span className="text-slate-400 font-normal text-sm lowercase">(opcional)</span>}
-                            </h3>
-                          </div>
-                          <p className="text-sm text-slate-600 font-medium leading-relaxed">
-                            Evalúe la función neurológica mediante el registro interactivo de cada parámetro por separado.
-                          </p>
-                        </div>
-                        
-                        {/* Puntaje Total Destacado */}
-                        <div className="flex flex-wrap items-center gap-3">
-                          <div className={cn(
-                            "flex items-center gap-2 px-5 py-2.5 rounded-2xl border-2 font-bold text-sm sm:text-base transition-all shadow-sm",
-                            patient.vitals?.glasgow === 15 
-                              ? "bg-green-50 text-green-700 border-green-200" 
-                              : patient.vitals?.glasgow && patient.vitals.glasgow >= 13 
-                              ? "bg-blue-50 text-blue-700 border-blue-200"
-                              : patient.vitals?.glasgow && patient.vitals.glasgow >= 9 
-                              ? "bg-yellow-50 text-yellow-700 border-yellow-200"
-                              : patient.vitals?.glasgow
-                              ? "bg-red-50 text-red-700 border-red-200"
-                              : "bg-slate-50 text-slate-400 border-slate-200"
-                          )}>
-                            <span>Puntaje GCS:</span>
-                            <span className="text-xl font-black bg-white/60 px-3 py-1 rounded-xl border border-black/5 shadow-inner">
-                              {patient.vitals?.glasgow !== undefined ? `${patient.vitals.glasgow}/15` : '---'}
-                            </span>
-                            <span className="hidden sm:inline-block font-bold">
-                              {patient.vitals?.glasgow === 15 
-                                ? "Normal / Alerta" 
-                                : patient.vitals?.glasgow && patient.vitals.glasgow >= 13 
-                                ? "Disfunción Leve"
-                                : patient.vitals?.glasgow && patient.vitals.glasgow >= 9 
-                                ? "Disfunción Moderada"
-                                : patient.vitals?.glasgow
-                                ? "Disfunción Grave"
-                                : "Sin evaluar"}
-                            </span>
-                          </div>
-
-
-                        </div>
-                      </div>
-
-                      {/* 3 Columnas por separado: Ocular, Verbal, Motor */}
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        {/* APERTURA OCULAR */}
-                        <div className="space-y-4 bg-slate-50/50 p-6 rounded-2xl border border-slate-200/60 shadow-[0_4px_14px_rgba(15,23,42,0.06)]">
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
-                            <h3 className="text-lg font-semibold text-slate-800 tracking-tight">Apertura Ocular</h3>
-                            <span className="text-xs bg-slate-100 text-slate-600 font-extrabold px-3 py-1 rounded-full border border-slate-200/60">Max 4</span>
-                          </div>
-                          <div className="space-y-2.5">
-                            {GCS_OPTIONS.eye.map(o => {
-                              const isSelected = patient.vitals?.glasgow !== undefined && gcsComponents.eye === o.value;
-                              return (
-                                <button
-                                  key={o.value}
-                                  type="button"
-                                  onClick={() => {
-                                    const next = { ...gcsComponents, eye: o.value };
-                                    setGcsComponents(next);
-                                    setPatient({
-                                      ...patient,
-                                      vitals: { 
-                                        ...patient.vitals!, 
-                                        glasgow: next.eye + next.verbal + next.motor 
-                                      }
-                                    });
-                                  }}
-                                  className={cn(
-                                    "w-full text-left px-4 py-3.5 rounded-xl border text-sm leading-relaxed transition-all flex items-center justify-between group cursor-pointer shadow-sm select-none",
-                                    isSelected 
-                                      ? "bg-blue-600 text-white border-2 border-blue-600 font-extrabold shadow-md scale-[1.01]" 
-                                      : "bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50 hover:border-slate-350"
-                                  )}
-                                >
-                                  <span className="leading-tight pr-2 font-semibold">{o.label}</span>
-                                  <span className={cn(
-                                    "text-xs md:text-sm px-2.5 py-0.5 rounded font-black shrink-0",
-                                    isSelected ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-500"
-                                  )}>
-                                    {o.value}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        {/* RESPUESTA VERBAL */}
-                        <div className="space-y-4 bg-slate-50/50 p-6 rounded-2xl border border-slate-200/60 shadow-[0_4px_14px_rgba(15,23,42,0.06)]">
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
-                            <h3 className="text-lg font-semibold text-slate-800 tracking-tight">Respuesta Verbal</h3>
-                            <span className="text-xs bg-slate-100 text-slate-600 font-extrabold px-3 py-1 rounded-full border border-slate-200/60">Max 5</span>
-                          </div>
-                          <div className="space-y-2.5">
-                            {GCS_OPTIONS.verbal.map(o => {
-                              const isSelected = patient.vitals?.glasgow !== undefined && gcsComponents.verbal === o.value;
-                              return (
-                                <button
-                                  key={o.value}
-                                  type="button"
-                                  onClick={() => {
-                                    const next = { ...gcsComponents, verbal: o.value };
-                                    setGcsComponents(next);
-                                    setPatient({
-                                      ...patient,
-                                      vitals: { 
-                                        ...patient.vitals!, 
-                                        glasgow: next.eye + next.verbal + next.motor 
-                                      }
-                                    });
-                                  }}
-                                  className={cn(
-                                    "w-full text-left px-4 py-3.5 rounded-xl border text-sm leading-relaxed transition-all flex items-center justify-between group cursor-pointer shadow-sm select-none",
-                                    isSelected 
-                                      ? "bg-blue-600 text-white border-2 border-blue-600 font-extrabold shadow-md scale-[1.01]" 
-                                      : "bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50 hover:border-slate-350"
-                                  )}
-                                >
-                                  <span className="leading-tight pr-2 font-semibold">{o.label}</span>
-                                  <span className={cn(
-                                    "text-xs md:text-sm px-2.5 py-0.5 rounded font-black shrink-0",
-                                    isSelected ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-500"
-                                  )}>
-                                    {o.value}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        {/* RESPUESTA MOTORA */}
-                        <div className="space-y-4 bg-slate-50/50 p-6 rounded-2xl border border-slate-200/60 shadow-[0_4px_14px_rgba(15,23,42,0.06)]">
-                          <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-3">
-                            <h3 className="text-lg font-semibold text-slate-800 tracking-tight">Respuesta Motora</h3>
-                            <span className="text-xs bg-slate-100 text-slate-600 font-extrabold px-3 py-1 rounded-full border border-slate-200/60">Max 6</span>
-                          </div>
-                          <div className="space-y-2.5">
-                            {GCS_OPTIONS.motor.map(o => {
-                              const isSelected = patient.vitals?.glasgow !== undefined && gcsComponents.motor === o.value;
-                              return (
-                                <button
-                                  key={o.value}
-                                  type="button"
-                                  onClick={() => {
-                                    const next = { ...gcsComponents, motor: o.value };
-                                    setGcsComponents(next);
-                                    setPatient({
-                                      ...patient,
-                                      vitals: { 
-                                        ...patient.vitals!, 
-                                        glasgow: next.eye + next.verbal + next.motor 
-                                      }
-                                    });
-                                  }}
-                                  className={cn(
-                                    "w-full text-left px-4 py-3.5 rounded-xl border text-sm leading-relaxed transition-all flex items-center justify-between group cursor-pointer shadow-sm select-none",
-                                    isSelected 
-                                      ? "bg-blue-600 text-white border-2 border-blue-600 font-extrabold shadow-md scale-[1.01]" 
-                                      : "bg-white text-slate-600 border-slate-200/80 hover:bg-slate-50 hover:border-slate-350"
-                                  )}
-                                >
-                                  <span className="leading-tight pr-2 font-semibold">{o.label}</span>
-                                  <span className={cn(
-                                    "text-xs md:text-sm px-2.5 py-0.5 rounded font-black shrink-0",
-                                    isSelected ? "bg-blue-700 text-white" : "bg-slate-100 text-slate-500"
-                                  )}>
-                                    {o.value}
-                                  </span>
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
+                          );
+                        })}
                       </div>
                     </div>
                   </motion.div>
@@ -1981,9 +1770,8 @@ DESTINO SUGERIDO: ${triage.destination}
             <button 
               onClick={() => {
                 setPatient(INITIAL_PATIENT);
-                setGcsComponents({ eye: 4, verbal: 5, motor: 6 });
                 setStep(1);
-                setTepForcedRed(false);
+                setTepAlertDismissed(false);
                 setShowAlertModal(false);
                 setShowFindingsAlert(false);
                 setFindingsAlertDismissed(false);
@@ -2137,7 +1925,7 @@ DESTINO SUGERIDO: ${triage.destination}
                 <div>
                   <span className="text-[10px] font-black tracking-widest uppercase text-white/80 block">Seguridad del Paciente</span>
                   <h3 className="text-base font-black tracking-tight uppercase">
-                    ¡ALERTA CRÍTICA: PACIENTE GRAVE!
+                    ¡ALERTA: SITUACIÓN DE RIESGO!
                   </h3>
                 </div>
               </div>
@@ -2146,10 +1934,7 @@ DESTINO SUGERIDO: ${triage.destination}
               <div className="p-6 space-y-4">
                 <div className="p-4 bg-red-50 border border-red-100 rounded-2xl">
                   <p className="text-sm font-bold text-red-900 leading-relaxed">
-                    El Triángulo de Evaluación Pediátrico (TEP) presenta alteración en 2 o más lados.
-                  </p>
-                  <p className="text-xs text-red-700 mt-2 leading-relaxed">
-                    Clasificación sugerida: <span className="font-extrabold uppercase">ROJO (Emergencia / Riesgo Vital)</span>. Inicie estabilización inmediata y notifique al equipo médico de guardia de inmediato.
+                    Se ha identificado una situación de riesgo. El Triángulo de Evaluación Pediátrico (TEP) presenta alteración en 2 o más lados. El paciente requiere atención inmediata.
                   </p>
                 </div>
 
@@ -2166,27 +1951,66 @@ DESTINO SUGERIDO: ${triage.destination}
               </div>
 
               {/* Acciones */}
-              <div className="bg-slate-50 px-6 py-4 flex flex-col sm:flex-row gap-2 sm:justify-end border-t border-slate-100">
+              <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => {
                     setShowAlertModal(false);
+                    setTepAlertDismissed(true);
                   }}
-                  className="order-2 sm:order-1 px-5 py-2.5 rounded-xl text-slate-600 bg-white hover:bg-slate-100 font-bold text-sm transition-all border border-slate-200 active:scale-95 cursor-pointer"
+                  className="w-full sm:w-auto px-6 py-3 rounded-xl text-white bg-red-600 hover:bg-red-700 font-bold text-sm tracking-wide transition-all shadow-lg shadow-red-200 active:scale-95 cursor-pointer"
                 >
-                  Reevaluar TEP
+                  Aceptar / Continuar evaluación
                 </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {showAgeWarningModal && (
+          <motion.div
+            key="pediatric-age-warning-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl overflow-hidden shadow-2xl max-w-md w-full border border-slate-100"
+            >
+              {/* Encabezado: Color de fondo Ámbar/Naranja, Icono de Alerta de Escudo (ShieldAlert) y texto */}
+              <div className="bg-amber-500 p-6 text-slate-950 flex items-center gap-3">
+                <div className="p-2 bg-white/25 rounded-2xl">
+                  <ShieldAlert size={28} className="text-slate-950 animate-bounce" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-slate-900/80 block">Límite de Edad Pediátrico</span>
+                  <h3 className="text-base font-black tracking-tight uppercase">
+                    Advertencia de Edad
+                  </h3>
+                </div>
+              </div>
+
+              {/* Mensaje Central */}
+              <div className="p-6 space-y-4 text-left">
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl space-y-2">
+                  <p className="text-sm font-bold text-amber-950 leading-relaxed">
+                    Edad fuera del rango pediátrico. Esta herramienta está configurada para triaje pediátrico. Verifique la edad ingresada.
+                  </p>
+                </div>
+              </div>
+
+              {/* Acciones */}
+              <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => {
-                    setTepForcedRed(true);
-                    setShowAlertModal(false);
-                    // auto-advance to step 3 (Motivo de consulta)
-                    setStep(3);
-                  }}
-                  className="order-1 sm:order-2 px-5 py-2.5 rounded-xl text-white bg-red-600 hover:bg-red-700 font-bold text-sm tracking-wide transition-all shadow-lg shadow-red-200 active:scale-95 cursor-pointer"
+                  onClick={() => setShowAgeWarningModal(false)}
+                  className="px-5 py-2.5 rounded-xl text-white bg-amber-500 hover:bg-amber-600 font-bold text-sm tracking-wide transition-all shadow-lg shadow-amber-200 active:scale-95 cursor-pointer"
                 >
-                  Confirmar Triage Rojo
+                  Entendido
                 </button>
               </div>
             </motion.div>

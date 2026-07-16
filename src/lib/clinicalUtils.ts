@@ -86,8 +86,7 @@ export const getVitalsRequirementsByLevel = (levelStr: TriageLevel) => {
       diastolicBP: true,
       oxygenSaturation: true,
       temperature: true,
-      glasgow: false,
-      glucose: true,
+      glucose: false,
     };
   }
   return {
@@ -97,7 +96,6 @@ export const getVitalsRequirementsByLevel = (levelStr: TriageLevel) => {
     diastolicBP: false,
     oxygenSaturation: false,
     temperature: false,
-    glasgow: false,
     glucose: false,
   };
 };
@@ -113,8 +111,8 @@ export const calculateTriage = (
     diastolicBP: undefined,
     oxygenSaturation: undefined,
     temperature: undefined,
-    glasgow: 15,
     glucose: undefined,
+    avpu: 'A',
   };
   const ageMonths = (data.age || 0) * (data.ageUnit === 'años' ? 12 : 1);
 
@@ -125,13 +123,13 @@ export const calculateTriage = (
     suggestedLevelValue = 1;
   }
 
-  // --- 2. Glasgow Coma Scale (GCS) Modifier ---
-  if (v.glasgow !== undefined) {
-    if (v.glasgow <= 9) {
+  // --- 2. AVPU Neurological Modifier ---
+  if (v.avpu !== undefined) {
+    if (v.avpu === 'U') {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
-    } else if (v.glasgow >= 10 && v.glasgow <= 13) {
+    } else if (v.avpu === 'P') {
       suggestedLevelValue = Math.min(suggestedLevelValue, 2);
-    } else if (v.glasgow === 14) {
+    } else if (v.avpu === 'V') {
       suggestedLevelValue = Math.min(suggestedLevelValue, 3);
     }
   }

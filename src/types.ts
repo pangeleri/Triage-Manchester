@@ -7,11 +7,8 @@ export interface VitalSigns {
   diastolicBP?: number;
   oxygenSaturation?: number;
   temperature?: number;
-  glasgow?: number;
   glucose?: number;
-  painScale?: string;
-  painScore?: number;
-  avdi?: string;
+  avpu?: string;
   condicionMedicionSpo2?: string;
   metodoTemperatura?: string;
 }
@@ -71,8 +68,7 @@ export interface ReevaluacionData {
   glucemia?: number;
   tensionArterialSistolica?: number;
   tensionArterialDiastolica?: number;
-  avdi?: string;
-  puntajeDolor?: number;
+  avpu?: string;
   motivoNoObtencion?: string;
   
   fechaCreacion?: string;

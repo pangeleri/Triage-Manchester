@@ -81,9 +81,9 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
           glucemia: record.vitals.glucose !== undefined ? record.vitals.glucose : null,
           tension_arterial_sistolica: record.vitals.systolicBP !== undefined ? record.vitals.systolicBP : null,
           tension_arterial_diastolica: record.vitals.diastolicBP !== undefined ? record.vitals.diastolicBP : null,
-          escala_dolor: record.vitals.painScale || null,
-          puntaje_dolor: record.vitals.painScore !== undefined ? record.vitals.painScore : null,
-          avdi: record.vitals.avdi || null,
+          escala_dolor: null,
+          puntaje_dolor: null,
+          avdi: record.vitals.avpu || null,
           motivo_no_obtencion: record.motivoNoObtencion || null
         }
       ]);
@@ -167,8 +167,8 @@ export async function saveReevaluation(reev: ReevaluacionData): Promise<{ succes
           glucemia: reev.glucemia !== undefined ? reev.glucemia : null,
           tension_arterial_sistolica: reev.tensionArterialSistolica !== undefined ? reev.tensionArterialSistolica : null,
           tension_arterial_diastolica: reev.tensionArterialDiastolica !== undefined ? reev.tensionArterialDiastolica : null,
-          avdi: reev.avdi || null,
-          puntaje_dolor: reev.puntajeDolor !== undefined ? reev.puntajeDolor : null,
+          avdi: reev.avpu || null,
+          puntaje_dolor: null,
           motivo_no_obtencion: reev.motivoNoObtencion || null
         }
       ]);
@@ -322,9 +322,7 @@ export async function fetchTriageRecords(): Promise<PatientData[]> {
           glucose: signosRow.glucemia !== null ? signosRow.glucemia : undefined,
           systolicBP: signosRow.tension_arterial_sistolica !== null ? signosRow.tension_arterial_sistolica : undefined,
           diastolicBP: signosRow.tension_arterial_diastolica !== null ? signosRow.tension_arterial_diastolica : undefined,
-          painScale: signosRow.escala_dolor || undefined,
-          painScore: signosRow.puntaje_dolor !== null ? signosRow.puntaje_dolor : undefined,
-          avdi: signosRow.avdi || undefined
+          avpu: signosRow.avdi || undefined
         },
 
         frecuenciaCardiacaDs: signosRow.frecuencia_cardiaca_ds || 'no_calculado',
@@ -365,8 +363,7 @@ export async function fetchTriageRecords(): Promise<PatientData[]> {
           glucemia: rv.glucemia || undefined,
           tensionArterialSistolica: rv.tension_arterial_sistolica || undefined,
           tensionArterialDiastolica: rv.tension_arterial_diastolica || undefined,
-          avdi: rv.avdi || undefined,
-          puntajeDolor: rv.puntaje_dolor || undefined,
+          avpu: rv.avdi || undefined,
           motivoNoObtencion: rv.motivo_no_obtencion || undefined,
           fechaCreacion: rv.fecha_creacion
         }))
