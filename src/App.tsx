@@ -87,9 +87,9 @@ const INITIAL_PATIENT: Partial<PatientData> = {
   type: 'pediatric',
   tep: INITIAL_TEP,
   tepStates: {
-    apariencia: 'no_evaluado',
-    respiracion: 'no_evaluado',
-    circulacion: 'no_evaluado',
+    apariencia: 'normal',
+    respiracion: 'normal',
+    circulacion: 'normal',
   },
   vitals: INITIAL_VITALS,
   findings: [],
@@ -1002,13 +1002,10 @@ DESTINO SUGERIDO: ${triage.destination}
                         <Stethoscope size={28} />
                         <h2 className="text-2xl font-black tracking-tight">Triángulo de Evaluación Pediátrico (TEP)</h2>
                       </div>
-                      <span className="text-xs bg-blue-100 text-blue-800 px-3.5 py-1.5 rounded-full font-black uppercase tracking-wider shrink-0 self-start sm:self-auto">
-                        Obligatorio en Pediatría
-                      </span>
                     </div>
 
                     <p className="text-base text-slate-600 font-medium leading-relaxed">
-                      Evalúe cada lado del triángulo de forma independiente seleccionando su estado clínico y detallando hallazgos si está alterado:
+                      Evalúe cada lado del triángulo de forma independiente seleccionando los hallazgos clínicos observados:
                     </p>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1050,115 +1047,61 @@ DESTINO SUGERIDO: ${triage.destination}
                           ]
                         }
                       ].map(section => {
-                        const currentStatus = patient.tepStates?.[section.key as keyof typeof patient.tepStates] || 'no_evaluado';
+                        const currentStatus = patient.tepStates?.[section.key as keyof typeof patient.tepStates] || 'normal';
+                        const isAlterado = currentStatus === 'alterado';
                         
                         return (
                           <div key={section.title} className={cn(
                             "p-5 rounded-2xl border-2 transition-all shadow-sm flex flex-col justify-between",
-                            currentStatus === 'alterado' && "bg-rose-50 border-rose-300 shadow-md",
-                            currentStatus === 'normal' && "bg-emerald-50 border-emerald-200 shadow-sm",
-                            currentStatus === 'no_valorable' && "bg-amber-50 border-amber-200 shadow-sm",
-                            currentStatus === 'no_evaluado' && "bg-white border-slate-200"
+                            isAlterado ? "bg-rose-50 border-rose-300 shadow-md" : "bg-emerald-50 border-emerald-200 shadow-sm"
                           )}>
                             <div>
-                              <div className="flex justify-between items-center mb-4 border-b border-slate-250/60 pb-2.5">
+                              <div className="flex justify-between items-center mb-4 border-b border-slate-200 pb-2.5">
                                 <h3 className="font-sans font-black text-slate-950 text-lg tracking-tight">{section.title}</h3>
                                 <span className={cn(
                                   "text-[10px] px-2.5 py-1 rounded-full font-black uppercase tracking-wider font-mono border",
-                                  currentStatus === 'alterado' && "bg-rose-100 text-rose-800 border-rose-200",
-                                  currentStatus === 'normal' && "bg-emerald-100 text-emerald-800 border-emerald-200",
-                                  currentStatus === 'no_valorable' && "bg-amber-100 text-amber-850 border-amber-200",
-                                  currentStatus === 'no_evaluado' && "bg-slate-100 text-slate-600 border-slate-200"
+                                  isAlterado ? "bg-rose-100 text-rose-800 border-rose-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"
                                 )}>
-                                  {currentStatus === 'no_evaluado' ? 'Pendiente' : currentStatus.replace('_', ' ')}
+                                  {isAlterado ? 'Alterado' : 'Normal'}
                                 </span>
                               </div>
 
-                              {/* Selector de los 4 estados requeridos */}
-                              <div className="grid grid-cols-2 gap-2 mb-4">
-                                {[
-                                  { value: 'normal', label: 'Normal', color: 'peer-checked:bg-emerald-600' },
-                                  { value: 'alterado', label: 'Alterado', color: 'peer-checked:bg-rose-600' },
-                                  { value: 'no_valorable', label: 'No Valorable', color: 'peer-checked:bg-amber-600' },
-                                  { value: 'no_evaluado', label: 'Sin Evaluar', color: 'peer-checked:bg-slate-600' }
-                                ].map(st => (
-                                  <label key={st.value} className="relative block cursor-pointer">
-                                    <input 
-                                      type="radio"
-                                      name={`tep-status-${section.key}`}
-                                      value={st.value}
-                                      checked={currentStatus === st.value}
-                                      className="peer sr-only"
-                                      onChange={() => {
-                                        const nextStates = { ...patient.tepStates!, [section.key]: st.value as any };
-                                        
-                                        // If not alterado, clear specific abnormalities
-                                        const nextTep = { ...patient.tep! };
-                                        if (st.value !== 'alterado') {
-                                          const secKey = section.tepKey;
-                                          const secObj = { ...(nextTep as any)[secKey] };
-                                          Object.keys(secObj).forEach(k => {
-                                            secObj[k] = false;
-                                          });
-                                          (nextTep as any)[secKey] = secObj;
-                                        }
-
-                                        setPatient({ ...patient, tepStates: nextStates, tep: nextTep });
-                                      }}
-                                    />
-                                    <div className={cn(
-                                      "py-2 text-center border-2 border-slate-200 rounded-xl font-black text-xs text-slate-600 transition-all select-none hover:bg-slate-50",
-                                      "peer-checked:border-transparent peer-checked:text-white",
-                                      currentStatus === st.value && (
-                                        st.value === 'normal' ? "bg-emerald-600 text-white border-transparent shadow-sm" :
-                                        st.value === 'alterado' ? "bg-rose-600 text-white border-transparent shadow-sm" :
-                                        st.value === 'no_valorable' ? "bg-amber-500 text-white border-transparent shadow-sm" :
-                                        "bg-slate-500 text-white border-transparent shadow-sm"
-                                      )
-                                    )}>
-                                      {st.label}
-                                    </div>
-                                  </label>
-                                ))}
-                              </div>
-
-                              {/* Detalles si el estado es alterado - se muestra directamente */}
-                              {currentStatus === 'alterado' && (
-                                <div className="space-y-1.5 mt-4 pt-4 border-t border-slate-200">
-                                  <div className="text-[10px] font-black uppercase text-rose-800 tracking-wider mb-2">
-                                    Hallazgos específicos:
-                                  </div>
-                                  <div className="space-y-1.5 bg-white/65 p-3 rounded-xl border border-rose-150 shadow-inner">
-                                    {section.options.map(opt => {
-                                      const isChecked = !!(patient.tep as any)[section.tepKey][opt.k];
-                                      return (
-                                        <label key={opt.k} className={cn(
-                                          "flex items-center gap-2.5 text-xs cursor-pointer p-2 rounded-lg transition-all border border-transparent select-none",
-                                          isChecked ? "bg-rose-100 text-rose-950 border-rose-200 font-bold" : "hover:bg-slate-100 text-slate-700"
-                                        )}>
-                                          <input 
-                                            type="checkbox" 
-                                            className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
-                                            checked={isChecked}
-                                            onChange={() => {
-                                              const nextTep = { ...patient.tep! };
-                                              const secKey = section.tepKey;
-                                              const secObj = { ...(nextTep as any)[secKey] };
-                                              secObj[opt.k] = !secObj[opt.k];
-                                              secObj.normal = false;
-                                              (nextTep as any)[secKey] = secObj;
-                                              
-                                              const nextStates = { ...patient.tepStates!, [section.key]: 'alterado' as any };
-                                              setPatient(p => ({ ...p, tep: nextTep, tepStates: nextStates }));
-                                            }}
-                                          />
-                                          <span className="leading-snug">{opt.l}</span>
-                                        </label>
-                                      );
-                                    })}
-                                  </div>
+                              <div className="space-y-1.5 mt-2">
+                                <div className="space-y-1.5 bg-white/65 p-3 rounded-xl border border-slate-200/60 shadow-inner">
+                                  {section.options.map(opt => {
+                                    const isChecked = !!(patient.tep as any)[section.tepKey][opt.k];
+                                    return (
+                                      <label key={opt.k} className={cn(
+                                        "flex items-center gap-2.5 text-xs cursor-pointer p-2 rounded-lg transition-all border border-transparent select-none",
+                                        isChecked ? "bg-rose-100 text-rose-950 border-rose-200 font-bold" : "hover:bg-slate-100 text-slate-700"
+                                      )}>
+                                        <input 
+                                          type="checkbox" 
+                                          className="w-4 h-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500 cursor-pointer"
+                                          checked={isChecked}
+                                          onChange={() => {
+                                            const nextTep = { ...patient.tep! };
+                                            const secKey = section.tepKey;
+                                            const secObj = { ...(nextTep as any)[secKey] };
+                                            secObj[opt.k] = !secObj[opt.k];
+                                            secObj.normal = false;
+                                            (nextTep as any)[secKey] = secObj;
+                                            
+                                            // Determine if any option is true
+                                            const isAnyChecked = Object.keys(secObj).some(k => k !== 'normal' && secObj[k]);
+                                            const nextStates = { 
+                                              ...patient.tepStates!, 
+                                              [section.key]: isAnyChecked ? 'alterado' : 'normal' 
+                                            };
+                                            setPatient(p => ({ ...p, tep: nextTep, tepStates: nextStates }));
+                                          }}
+                                        />
+                                        <span className="leading-snug">{opt.l}</span>
+                                      </label>
+                                    );
+                                  })}
                                 </div>
-                              )}
+                              </div>
                             </div>
                           </div>
                         );
