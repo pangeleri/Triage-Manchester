@@ -565,7 +565,9 @@ export default function App() {
     }
 
     setValidationError(null);
-    const ageMonths = (patient.age || 0) * (patient.ageUnit === 'años' ? 12 : 1);
+    const ageMonths = patient.age !== undefined
+      ? patient.age * (patient.ageUnit === 'años' ? 12 : 1)
+      : undefined;
     
     // Set clinical target goals in minutes and timestamps
     const levelMapMin: Record<string, number> = { 'I': 0, 'II': 15, 'III': 30, 'IV': 60, 'V': 120 };
@@ -1225,7 +1227,34 @@ DESTINO SUGERIDO: ${triage.destination}
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                       {(() => {
                         const reqs = getVitalsRequirements();
-                        const ageMonths = patient.ageUnit === 'meses' ? (patient.age || 0) : (patient.age || 0) * 12;
+                        const ageMonths = patient.age !== undefined
+                          ? (patient.ageUnit === 'meses' ? patient.age : patient.age * 12)
+                          : undefined;
+
+                        const getVitalsAlertInfo = (key: string, val: number | undefined) => {
+                          if (val === undefined || val === null || isNaN(val)) return null;
+                          if (key === 'heartRate' || key === 'respiratoryRate') {
+                            return getVitalsDSLabel(val, ageMonths, key === 'heartRate' ? 'FC' : 'FR');
+                          }
+                          if (key === 'oxygenSaturation') {
+                            if (val < 90) return { label: 'Crítico (<90%)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                            if (val <= 92) return { label: 'Emergencia (90-92%)', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                            if (val <= 94) return { label: 'Bajo (93-94%)', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                            return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
+                          }
+                          if (key === 'temperature') {
+                            if (val < 32 || val >= 41) return { label: 'Crítica', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                            if (val < 35 || val >= 38.5) return { label: 'Fiebre / Hipotermia', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                            if (val >= 37.5) return { label: 'Febrícula', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                            return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
+                          }
+                          if (key === 'glucose') {
+                            if (val < 40 || val > 500) return { label: 'Crítica', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                            if (val < 65 || val > 250) return { label: 'Alterada', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                            return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
+                          }
+                          return null;
+                        };
 
                         return [
                           { key: 'heartRate', label: 'FC (lpm)', icon: <Activity size={18} /> },
@@ -1237,16 +1266,43 @@ DESTINO SUGERIDO: ${triage.destination}
                           { key: 'glucose', label: 'Glucemia (mg/dL)', icon: <Activity size={18} /> },
                         ].map(v => {
                           const isRequired = reqs[v.key as keyof typeof reqs];
-                          const dsInfo = (v.key === 'heartRate' || v.key === 'respiratoryRate')
-                            ? getVitalsDSLabel(patient.vitals?.[v.key as keyof VitalSigns] as number, ageMonths, v.key === 'heartRate' ? 'FC' : 'FR')
-                            : null;
+                          const val = patient.vitals?.[v.key as keyof VitalSigns] as number | undefined;
+                          const dsInfo = getVitalsAlertInfo(v.key, val);
+
+                          const isCritico = dsInfo && (
+                            dsInfo.key === 'critico' ||
+                            dsInfo.key === 'mayor_mas_2_ds_fuera_tabla' ||
+                            dsInfo.key === 'menor_menos_2_ds_fuera_tabla'
+                          );
+                          const isAlto = dsInfo && (
+                            dsInfo.key === 'alto' ||
+                            dsInfo.key === 'mas_2_ds' ||
+                            dsInfo.key === 'menos_2_ds'
+                          );
+                          const isElevado = dsInfo && (
+                            dsInfo.key === 'elevado' ||
+                            dsInfo.key === 'mas_1_ds' ||
+                            dsInfo.key === 'menos_1_ds'
+                          );
+                          const isSinEdad = dsInfo && dsInfo.key === 'sin_edad';
+
+                          const cardBgClass = isCritico ? "bg-rose-50/80 border-rose-300 shadow-md ring-1 ring-rose-300/40" :
+                                              isAlto ? "bg-orange-50/80 border-orange-300 shadow-xs ring-1 ring-orange-300/30" :
+                                              isElevado ? "bg-yellow-50/80 border-yellow-300 shadow-xs" :
+                                              isSinEdad ? "bg-amber-50/40 border-amber-200" :
+                                              "bg-slate-50 border-slate-200 shadow-sm";
+
+                          const inputBorderClass = isCritico ? "border-rose-300 focus:ring-rose-400 focus:border-rose-400" :
+                                                   isAlto ? "border-orange-300 focus:ring-orange-400 focus:border-orange-400" :
+                                                   isElevado ? "border-yellow-300 focus:ring-yellow-400 focus:border-yellow-400" :
+                                                   "border-slate-300 focus:ring-blue-500 focus:border-blue-500";
 
                           return (
-                            <div key={v.key} className="space-y-2 relative flex flex-col justify-between p-3.5 bg-slate-50 border border-slate-200 rounded-2xl shadow-sm">
+                            <div key={v.key} className={cn("space-y-2 relative flex flex-col justify-between p-3.5 rounded-2xl transition-all duration-300 border", cardBgClass)}>
                               <div className="space-y-2">
                                 <label className="text-[11px] md:text-xs font-black text-slate-650 flex items-center justify-between gap-1.5 uppercase tracking-wide">
                                   <span className="flex items-center gap-1.5">{v.icon} {v.label} {isRequired ? <span className="text-red-500 font-black">*</span> : <span className="text-slate-400 font-medium text-[10px] lowercase">(opcional)</span>}</span>
-                                  {dsInfo && patient.vitals?.[v.key as keyof VitalSigns] !== undefined && (
+                                  {dsInfo && val !== undefined && (
                                     <span className={cn("text-[11px] font-black uppercase px-2.5 py-1 rounded-full border shadow-xs animate-pulse", dsInfo.colorClass)}>
                                       {dsInfo.label}
                                     </span>
@@ -1255,7 +1311,7 @@ DESTINO SUGERIDO: ${triage.destination}
                                 <input 
                                   type="number" 
                                   step={v.key === 'temperature' ? 0.1 : 1}
-                                  className="w-full p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none text-base font-black text-slate-800 shadow-sm placeholder:text-slate-400 bg-white"
+                                  className={cn("w-full p-3 rounded-xl border outline-none text-base font-black text-slate-800 shadow-sm placeholder:text-slate-400 bg-white transition-all duration-300", inputBorderClass)}
                                   placeholder={isRequired ? "---" : "--- (opcional)"}
                                   value={patient.vitals![v.key as keyof VitalSigns] ?? ''}
                                   onChange={e => {

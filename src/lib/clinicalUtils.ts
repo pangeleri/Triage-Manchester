@@ -19,28 +19,31 @@ export const getVitalsRange = (ageMonths: number, type: 'FR' | 'FC') => {
 
 export const getVitalsDSLabel = (
   val: number | undefined,
-  ageMonths: number,
+  ageMonths: number | undefined,
   type: 'FR' | 'FC'
 ): { label: string; colorClass: string; key: string } => {
   if (val === undefined || val === null || isNaN(val) || val <= 0) {
     return { label: 'No calculado', colorClass: 'bg-slate-100 text-slate-500', key: 'no_calculado' };
   }
+  if (ageMonths === undefined || ageMonths === null || isNaN(ageMonths)) {
+    return { label: 'Ingresar edad', colorClass: 'bg-amber-100 text-amber-800 border-amber-300 font-black', key: 'sin_edad' };
+  }
   const range = getVitalsRange(ageMonths, type);
 
   // Upper bounds
   if (val > range.d2[1]) {
-    return { label: '> +2 DS (Crítico)', colorClass: 'bg-red-100 text-red-800 font-extrabold', key: 'mayor_mas_2_ds_fuera_tabla' };
+    return { label: '> +2 DS (Crítico)', colorClass: 'bg-red-100 text-red-800 font-extrabold border-red-200', key: 'mayor_mas_2_ds_fuera_tabla' };
   }
   if (val > range.d1[1]) {
-    return { label: '+2 DS (Alto)', colorClass: 'bg-orange-100 text-orange-800 font-bold', key: 'mas_2_ds' };
+    return { label: '+2 DS (Alto)', colorClass: 'bg-orange-100 text-orange-800 font-bold border-orange-200', key: 'mas_2_ds' };
   }
   if (val > range.normal[1]) {
-    return { label: '+1 DS (Elevado)', colorClass: 'bg-yellow-100 text-yellow-800 font-bold', key: 'mas_1_ds' };
+    return { label: '+1 DS (Elevado)', colorClass: 'bg-yellow-100 text-yellow-800 font-bold border-yellow-200', key: 'mas_1_ds' };
   }
 
   // Normal bound
   if (val >= range.normal[0]) {
-    return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 font-semibold', key: 'normal' };
+    return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 font-semibold border-emerald-200', key: 'normal' };
   }
 
   // Lower bounds
@@ -48,12 +51,12 @@ export const getVitalsDSLabel = (
   const low2 = range.normal[0] * 0.4;
 
   if (val >= low1) {
-    return { label: '-1 DS (Bajo)', colorClass: 'bg-yellow-100 text-yellow-800 font-bold', key: 'menos_1_ds' };
+    return { label: '-1 DS (Bajo)', colorClass: 'bg-yellow-100 text-yellow-800 font-bold border-yellow-200', key: 'menos_1_ds' };
   }
   if (val >= low2) {
-    return { label: '-2 DS (Muy bajo)', colorClass: 'bg-orange-100 text-orange-800 font-bold', key: 'menos_2_ds' };
+    return { label: '-2 DS (Muy bajo)', colorClass: 'bg-orange-100 text-orange-800 font-bold border-orange-200', key: 'menos_2_ds' };
   }
-  return { label: '< -2 DS (Crítico)', colorClass: 'bg-red-100 text-red-800 font-extrabold', key: 'menor_menos_2_ds_fuera_tabla' };
+  return { label: '< -2 DS (Crítico)', colorClass: 'bg-red-100 text-red-800 font-extrabold border-red-200', key: 'menor_menos_2_ds_fuera_tabla' };
 };
 
 export const getTepLadosAlterados = (data: Partial<PatientData>) => {
@@ -114,7 +117,7 @@ export const calculateTriage = (
     glucose: undefined,
     avpu: 'A',
   };
-  const ageMonths = (data.age || 0) * (data.ageUnit === 'años' ? 12 : 1);
+  const ageMonths = data.age !== undefined ? data.age * (data.ageUnit === 'años' ? 12 : 1) : undefined;
 
   let suggestedLevelValue = 5;
 
@@ -146,11 +149,11 @@ export const calculateTriage = (
   }
 
   // --- 4. Hemodynamics & Vital Signs Modifiers (Pediatric-Only) ---
-  const frRange = getVitalsRange(ageMonths, 'FR');
-  const fcRange = getVitalsRange(ageMonths, 'FC');
+  const frRange = ageMonths !== undefined ? getVitalsRange(ageMonths, 'FR') : null;
+  const fcRange = ageMonths !== undefined ? getVitalsRange(ageMonths, 'FC') : null;
 
   // Respiratory Rate
-  if (v.respiratoryRate !== undefined) {
+  if (v.respiratoryRate !== undefined && frRange) {
     if (v.respiratoryRate > frRange.d2[1] * 1.2 || v.respiratoryRate < frRange.normal[0] * 0.4) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
     } else if (v.respiratoryRate > frRange.d2[1] || v.respiratoryRate < frRange.normal[0] * 0.6) {
@@ -161,7 +164,7 @@ export const calculateTriage = (
   }
 
   // Heart Rate
-  if (v.heartRate !== undefined) {
+  if (v.heartRate !== undefined && fcRange) {
     if (v.heartRate > fcRange.d2[1] * 1.3 || v.heartRate < fcRange.normal[0] * 0.4) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
     } else if (v.heartRate > fcRange.d2[1] || v.heartRate < fcRange.normal[0] * 0.6) {
@@ -176,7 +179,7 @@ export const calculateTriage = (
     if (v.temperature < 32 || v.temperature >= 41) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
     } else if (v.temperature < 35 || v.temperature >= 38.5) {
-      const isFeverWithSirs = v.temperature >= 38.5 && (
+      const isFeverWithSirs = v.temperature >= 38.5 && fcRange && frRange && (
         (v.heartRate && v.heartRate > fcRange.normal[1]) || 
         (v.respiratoryRate && v.respiratoryRate > frRange.normal[1])
       );
