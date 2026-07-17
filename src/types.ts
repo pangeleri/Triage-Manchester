@@ -150,8 +150,7 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Tos persistente o sibilancias con taquipnea leve'
       ],
       IV: [
-        'Infección respiratoria alta con constantes estables (tos/resfrío)',
-        'Disnea de esfuerzo leve sin signos de alarma y SpO2 >= 95%'
+        'Infección respiratoria alta con constantes estables (tos/resfrío)'
       ],
       V: [
         'Goteo nasal u odinofagia leve sin signos sistémicos ni dificultad'
@@ -169,25 +168,15 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Arritmia maligna activa con colapso o dolor torácico severo'
       ],
       II: [
-        'Dolor torácico opresivo de sospecha isquémica (SCA)',
-        'Crisis hipertensiva con daño de órgano diana (edema agudo pulmonar)',
         'Síncope cardio-neurológico de instalación súbita y alteración hemodinámica',
         'Hemorragia mayor activa con inestabilidad potencial'
       ],
       III: [
-        'Hipertensión sintomática sin daño de órgano diana',
         'Palpitaciones ocasionales sin compromiso hemodinámico',
-        'Dolor torácico atípico no isquémico EVA < 5',
-        'Insuficiencia venosa aguda unilateral dolorosa'
+        'Dolor torácico atípico no isquémico EVA < 5'
       ],
-      IV: [
-        'Varices estables con dolor leve localizado',
-        'Cifras tensionales levemente elevadas y asintomático'
-      ],
-      V: [
-        'Control rutinario de presión arterial sin sintomatología',
-        'Edema bilateral de extremidades inferiores crónico sin cambios agudos'
-      ]
+      IV: [],
+      V: []
     }
   },
   {
@@ -201,8 +190,7 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
       ],
       II: [
         'Déficit neurológico focal agudo < 24h (sospecha de ACV o TIA)',
-        'Glasgow GCS 10 a 13 o alteración aguda relevante del estado mental',
-        'Cefalea intensa hiperaguda en trallazo sin antecedentes (sospecha HSA)'
+        'Glasgow GCS 10 a 13 o alteración aguda relevante del estado mental'
       ],
       III: [
         'Crisis convulsiva resuelta con retorno al estado basal normal',
@@ -214,8 +202,7 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Parálisis facial periférica estable (Bell)'
       ],
       V: [
-        'Cefalea tensional leve o dolor crónico estable',
-        'Parestesias crónicas estables de larga evolución'
+        'Cefalea tensional leve o dolor crónico estable'
       ]
     }
   },
@@ -365,8 +352,7 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
       ],
       V: [
         'Prurito crónico o dermatofitosis (hongos) localizada',
-        'Erupción cutánea crónica estable sin cambios agudos',
-        'Lesiones seniles benignas o verrugas estables'
+        'Erupción cutánea crónica estable sin cambios agudos'
       ]
     }
   },
@@ -388,12 +374,10 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Insuficiencia adrenal aguda sospechada por estrés sin shock inmediato'
       ],
       IV: [
-        'Hiperglucemia persistente aislada sintomática sin acidosis ni cetonuria',
-        'Sintomatología tirotóxica leve o bocio sin disnea'
+        'Hiperglucemia persistente aislada sintomática sin acidosis ni cetonuria'
       ],
       V: [
-        'Control de glucemia de rutina',
-        'Ajuste de dosis de insulina o levotiroxina crónicos'
+        'Control de glucemia de rutina'
       ]
     }
   },
@@ -406,8 +390,7 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Dolor intratable asociado a shock neurogénico o politraumatismo severo'
       ],
       II: [
-        'Dolor agudo extremo de cualquier origen EVA >= 8 de 10',
-        'Cefalea súbita en trallazo extremadamente intensa'
+        'Dolor agudo extremo de cualquier origen EVA >= 8 de 10'
       ],
       III: [
         'Dolor agudo de intensidad moderada EVA 4 a 7 de 10',
@@ -418,8 +401,7 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Mialgia localizada menor'
       ],
       V: [
-        'Dolor crónico de baja intensidad o controlado en tratamiento paliativo',
-        'Solicitud de analgésicos habituales por receta'
+        'Dolor crónico de baja intensidad o controlado en tratamiento paliativo'
       ]
     }
   },
@@ -447,7 +429,6 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Anemia crónica conocida asintomática'
       ],
       V: [
-        'Control de anticoagulación habitual (INR estable)',
         'Adenopatías crónicas asintomáticas estables'
       ]
     }
@@ -520,8 +501,7 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
       ],
       II: [
         'Traumatismo ocular penetrante sospechado o quemadura ocular por agentes químicos activos',
-        'Pérdida súbita unilateral de la visión (Sospecha desprendimiento retina, oclusión arterial)',
-        'Glaucoma agudo de ángulo cerrado (Dolor ocular severo con ojo rojo y pupila dilatante)'
+        'Pérdida súbita unilateral de la visión (Sospecha desprendimiento retina, oclusión arterial)'
       ],
       III: [
         'Cuerpo extraño corneal o conjuntival retenido',
@@ -565,36 +545,6 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
     }
   },
   {
-    id: 'obstetrico',
-    name: 'Obstétrico',
-    description: 'Embarazo, Trabajo de Parto y Complicaciones Obstétricas',
-    matrix: {
-      I: [
-        'Hemorragia del tercer trimestre masiva con shock o sospecha de Desprendimiento Prematuro de Placenta (DPPNI)',
-        'Eclampsia activa o crisis hipertensiva en el embarazo con convulsiones'
-      ],
-      II: [
-        'Preoperatorio inmediato de cesárea de emergencia o prolapso de cordón',
-        'Preeclampsia con criterios de severidad (cefalea, fosfenos, dolor en epigastrio)',
-        'Hemorragia del primer trimestre abundante con dolor abdominal severo (embarazo ectópico sospechado)',
-        'Trabajo de parto activo en fase expulsiva inmediata'
-      ],
-      III: [
-        'Hemorragia leve en el embarazo (cualquier trimestre) sin inestabilidad hemodinámica',
-        'Disminución de la percepción de movimientos fetales (>24 semanas)',
-        'Contracciones uterinas regulares pretérmino (<37 semanas)'
-      ],
-      IV: [
-        'Sospecha de pérdida de líquido amniótico a término sin dinámica activa',
-        'Síntomas menores de embarazo (náuseas/vómitos moderados, dolor pélvico grávido leve)'
-      ],
-      V: [
-        'Control rutinario de embarazo normal a término sin contracciones dolorosas',
-        'Embarazo confirmado de evolución normal'
-      ]
-    }
-  },
-  {
     id: 'toxicologico',
     name: 'Toxicol./Psiquiát.',
     description: 'Toxicología General, Sobredosis, Agitación o Salud Mental de Urgencia',
@@ -609,7 +559,6 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Crisis de agitación psicomotriz activa o agresividad incontrolable'
       ],
       III: [
-        'Síndrome de abstinencia moderado (ej. alcohol, benzodiacepinas) con temblor y diaforesis',
         'Descompensación psicótica sin agresividad inmediata ni ideación suicida activa',
         'Crisis de pánico o ansiedad generalizada severa'
       ],
@@ -617,9 +566,7 @@ export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
         'Trastorno adaptativo agudo con irritabilidad o llanto inconsolable',
         'Crisis de ansiedad leve reactiva'
       ],
-      V: [
-        'Insomnio crónico o solicitud de renovación de recetas de psicotrópicos'
-      ]
+      V: []
     }
   }
 ];
