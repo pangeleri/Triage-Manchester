@@ -1233,26 +1233,66 @@ DESTINO SUGERIDO: ${triage.destination}
 
                         const getVitalsAlertInfo = (key: string, val: number | undefined) => {
                           if (val === undefined || val === null || isNaN(val)) return null;
+                          
                           if (key === 'heartRate' || key === 'respiratoryRate') {
                             return getVitalsDSLabel(val, ageMonths, key === 'heartRate' ? 'FC' : 'FR');
                           }
+                          
+                          if (key === 'systolicBP') {
+                            const effectiveAge = ageMonths !== undefined ? ageMonths : 216;
+                            if (effectiveAge >= 216) {
+                              if (val < 80 || val >= 180) return { label: 'Crítica (<80 o ≥180)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                              if (val < 90 || val >= 140) return { label: val < 90 ? 'Hipotensión' : 'Hipertensión', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                              if (val >= 121 && val <= 139) return { label: 'Prehipertensión', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                              return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
+                            } else {
+                              const minPAS = effectiveAge <= 1 ? 60 : effectiveAge <= 12 ? 70 : effectiveAge <= 120 ? 70 + 2 * Math.floor(effectiveAge / 12) : 90;
+                              const maxPAS = effectiveAge <= 1 ? 90 : effectiveAge <= 12 ? 100 : effectiveAge <= 60 ? 110 : effectiveAge <= 144 ? 120 : 130;
+                              if (val < minPAS - 10 || val > maxPAS + 30) return { label: val < minPAS - 10 ? 'PAS Crítica' : 'PAS Crítica', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                              if (val < minPAS || val > maxPAS + 15) return { label: val < minPAS ? 'Hipotensión' : 'PAS Alta', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                              if (val > maxPAS) return { label: 'PAS Elevada', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                              return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
+                            }
+                          }
+
+                          if (key === 'diastolicBP') {
+                            const effectiveAge = ageMonths !== undefined ? ageMonths : 216;
+                            if (effectiveAge >= 216) {
+                              if (val < 40 || val >= 120) return { label: 'Crítica (<40 o ≥120)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                              if (val < 50 || val >= 90) return { label: val < 50 ? 'Hipotensión' : 'Hipertensión', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                              if (val >= 81 && val <= 89) return { label: 'Prehipertensión', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                              return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
+                            } else {
+                              const minPAD = effectiveAge <= 12 ? 40 : effectiveAge <= 60 ? 50 : effectiveAge <= 144 ? 55 : 60;
+                              const maxPAD = effectiveAge <= 12 ? 60 : effectiveAge <= 60 ? 70 : effectiveAge <= 144 ? 80 : 85;
+                              if (val < minPAD - 10 || val > maxPAD + 25) return { label: 'PAD Crítica', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                              if (val < minPAD || val > maxPAD + 10) return { label: val < minPAD ? 'PAD Baja' : 'PAD Alta', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                              if (val > maxPAD) return { label: 'PAD Elevada', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                              return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
+                            }
+                          }
+
                           if (key === 'oxygenSaturation') {
-                            if (val < 90) return { label: 'Crítico (<90%)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
-                            if (val <= 92) return { label: 'Emergencia (90-92%)', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
-                            if (val <= 94) return { label: 'Bajo (93-94%)', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                            if (val < 92) return { label: 'Crítico (<92%)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                            if (val <= 94) return { label: 'Bajo (92-94%)', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                            if (val === 95) return { label: 'Límite (95%)', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
                             return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
                           }
+
                           if (key === 'temperature') {
-                            if (val < 32 || val >= 41) return { label: 'Crítica', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
-                            if (val < 35 || val >= 38.5) return { label: 'Fiebre / Hipotermia', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
-                            if (val >= 37.5) return { label: 'Febrícula', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                            if (val < 32 || val >= 41) return { label: 'Crítica (<32° o ≥41°)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                            if (val < 35.5 || val >= 38.5) return { label: val < 35.5 ? 'Hipotermia (<35.5°)' : 'Fiebre (≥38.5°)', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                            if (val >= 37.5) return { label: 'Febrícula (37.5-38.4°)', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
                             return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
                           }
+
                           if (key === 'glucose') {
-                            if (val < 40 || val > 500) return { label: 'Crítica', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
-                            if (val < 65 || val > 250) return { label: 'Alterada', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                            if (val < 40 || val > 500) return { label: 'Crítica (<40 o >500)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                            if (val < 60 || val > 250) return { label: val < 60 ? 'Hipoglucemia' : 'Hiperglucemia', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                            if (val < 70 || val > 180) return { label: 'Alterada', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
                             return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
                           }
+
                           return null;
                         };
 

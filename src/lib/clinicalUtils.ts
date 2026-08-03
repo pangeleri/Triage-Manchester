@@ -2,18 +2,21 @@ import { PatientData, VitalSigns, TriageLevel, FINDINGS } from '../types';
 
 export const getVitalsRange = (ageMonths: number, type: 'FR' | 'FC') => {
   if (type === 'FR') {
-    if (ageMonths <= 6) return { normal: [30, 60], d1: [60, 70], d2: [70, 80] };
-    if (ageMonths <= 12) return { normal: [25, 45], d1: [45, 55], d2: [55, 60] };
-    if (ageMonths <= 36) return { normal: [20, 30], d1: [30, 35], d2: [35, 40] };
-    if (ageMonths <= 72) return { normal: [16, 24], d1: [24, 28], d2: [28, 32] };
-    return { normal: [14, 20], d1: [20, 24], d2: [24, 26] };
+    if (ageMonths <= 3) return { normal: [30, 50], d1: [50, 60], d2: [60, 70] };
+    if (ageMonths <= 12) return { normal: [25, 45], d1: [45, 55], d2: [55, 65] };
+    if (ageMonths <= 36) return { normal: [20, 30], d1: [30, 40], d2: [40, 50] };
+    if (ageMonths <= 72) return { normal: [18, 24], d1: [24, 30], d2: [30, 38] };
+    if (ageMonths <= 144) return { normal: [14, 20], d1: [20, 25], d2: [25, 30] };
+    if (ageMonths <= 216) return { normal: [12, 20], d1: [20, 25], d2: [25, 30] };
+    return { normal: [12, 20], d1: [20, 24], d2: [24, 30] };
   } else {
-    if (ageMonths <= 3) return { normal: [90, 180], d1: [180, 205], d2: [205, 230] };
-    if (ageMonths <= 6) return { normal: [80, 160], d1: [160, 180], d2: [180, 210] };
-    if (ageMonths <= 12) return { normal: [80, 140], d1: [140, 160], d2: [160, 180] };
-    if (ageMonths <= 36) return { normal: [75, 130], d1: [130, 145], d2: [145, 165] };
-    if (ageMonths <= 72) return { normal: [70, 110], d1: [110, 125], d2: [125, 140] };
-    return { normal: [60, 90], d1: [90, 105], d2: [105, 120] };
+    if (ageMonths <= 3) return { normal: [100, 160], d1: [160, 180], d2: [180, 200] };
+    if (ageMonths <= 12) return { normal: [90, 150], d1: [150, 170], d2: [170, 190] };
+    if (ageMonths <= 36) return { normal: [80, 130], d1: [130, 150], d2: [150, 170] };
+    if (ageMonths <= 72) return { normal: [70, 110], d1: [110, 130], d2: [130, 150] };
+    if (ageMonths <= 144) return { normal: [65, 105], d1: [105, 120], d2: [120, 135] };
+    if (ageMonths <= 216) return { normal: [60, 100], d1: [100, 115], d2: [115, 130] };
+    return { normal: [60, 100], d1: [100, 120], d2: [120, 140] };
   }
 };
 
@@ -25,10 +28,8 @@ export const getVitalsDSLabel = (
   if (val === undefined || val === null || isNaN(val) || val <= 0) {
     return { label: 'No calculado', colorClass: 'bg-slate-100 text-slate-500', key: 'no_calculado' };
   }
-  if (ageMonths === undefined || ageMonths === null || isNaN(ageMonths)) {
-    return { label: 'Ingresar edad', colorClass: 'bg-amber-100 text-amber-800 border-amber-300 font-black', key: 'sin_edad' };
-  }
-  const range = getVitalsRange(ageMonths, type);
+  const effectiveAge = (ageMonths !== undefined && ageMonths !== null && !isNaN(ageMonths)) ? ageMonths : 216;
+  const range = getVitalsRange(effectiveAge, type);
 
   // Upper bounds
   if (val > range.d2[1]) {
@@ -47,8 +48,8 @@ export const getVitalsDSLabel = (
   }
 
   // Lower bounds
-  const low1 = range.normal[0] * 0.6;
-  const low2 = range.normal[0] * 0.4;
+  const low1 = range.normal[0] * 0.75;
+  const low2 = range.normal[0] * 0.5;
 
   if (val >= low1) {
     return { label: '-1 DS (Bajo)', colorClass: 'bg-yellow-100 text-yellow-800 font-bold border-yellow-200', key: 'menos_1_ds' };
@@ -139,47 +140,71 @@ export const calculateTriage = (
 
   // --- 3. Oxygen Saturation Modifier ---
   if (v.oxygenSaturation !== undefined) {
-    if (v.oxygenSaturation < 90) {
+    if (v.oxygenSaturation < 92) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
-    } else if (v.oxygenSaturation >= 90 && v.oxygenSaturation <= 92) {
+    } else if (v.oxygenSaturation >= 92 && v.oxygenSaturation <= 94) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 2);
-    } else if (v.oxygenSaturation >= 93 && v.oxygenSaturation <= 94) {
+    } else if (v.oxygenSaturation >= 95 && v.oxygenSaturation <= 96) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 3);
     }
   }
 
-  // --- 4. Hemodynamics & Vital Signs Modifiers (Pediatric-Only) ---
-  const frRange = ageMonths !== undefined ? getVitalsRange(ageMonths, 'FR') : null;
-  const fcRange = ageMonths !== undefined ? getVitalsRange(ageMonths, 'FC') : null;
+  // --- 4. Hemodynamics & Vital Signs Modifiers ---
+  const effectiveAge = ageMonths !== undefined ? ageMonths : 216;
+  const frRange = getVitalsRange(effectiveAge, 'FR');
+  const fcRange = getVitalsRange(effectiveAge, 'FC');
 
   // Respiratory Rate
-  if (v.respiratoryRate !== undefined && frRange) {
-    if (v.respiratoryRate > frRange.d2[1] * 1.2 || v.respiratoryRate < frRange.normal[0] * 0.4) {
+  if (v.respiratoryRate !== undefined) {
+    if (v.respiratoryRate > frRange.d2[1] || v.respiratoryRate < frRange.normal[0] * 0.4) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
-    } else if (v.respiratoryRate > frRange.d2[1] || v.respiratoryRate < frRange.normal[0] * 0.6) {
+    } else if (v.respiratoryRate > frRange.d1[1] || v.respiratoryRate < frRange.normal[0] * 0.6) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 2);
-    } else if (v.respiratoryRate > frRange.d1[1] || v.respiratoryRate < frRange.normal[0]) {
+    } else if (v.respiratoryRate > frRange.normal[1] || v.respiratoryRate < frRange.normal[0]) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 3);
     }
   }
 
   // Heart Rate
-  if (v.heartRate !== undefined && fcRange) {
-    if (v.heartRate > fcRange.d2[1] * 1.3 || v.heartRate < fcRange.normal[0] * 0.4) {
+  if (v.heartRate !== undefined) {
+    if (v.heartRate > fcRange.d2[1] || v.heartRate < fcRange.normal[0] * 0.4) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
-    } else if (v.heartRate > fcRange.d2[1] || v.heartRate < fcRange.normal[0] * 0.6) {
+    } else if (v.heartRate > fcRange.d1[1] || v.heartRate < fcRange.normal[0] * 0.6) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 2);
-    } else if (v.heartRate > fcRange.d1[1] || v.heartRate < fcRange.normal[0]) {
+    } else if (v.heartRate > fcRange.normal[1] || v.heartRate < fcRange.normal[0]) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 3);
     }
   }
 
-  // --- 5. Temperature Modifiers (Pediatric) ---
+  // Blood Pressure (Systolic)
+  if (v.systolicBP !== undefined) {
+    if (effectiveAge >= 216) {
+      if (v.systolicBP < 80 || v.systolicBP >= 180) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.systolicBP < 90 || v.systolicBP >= 140) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.systolicBP >= 121 && v.systolicBP <= 139) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    } else {
+      const minPAS = effectiveAge <= 1 ? 60 : effectiveAge <= 12 ? 70 : effectiveAge <= 120 ? 70 + 2 * Math.floor(effectiveAge / 12) : 90;
+      const maxPAS = effectiveAge <= 1 ? 90 : effectiveAge <= 12 ? 100 : effectiveAge <= 60 ? 110 : effectiveAge <= 144 ? 120 : 130;
+      if (v.systolicBP < minPAS - 10 || v.systolicBP > maxPAS + 30) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.systolicBP < minPAS || v.systolicBP > maxPAS + 15) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.systolicBP > maxPAS) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    }
+  }
+
+  // --- 5. Temperature Modifiers ---
   if (v.temperature !== undefined) {
     if (v.temperature < 32 || v.temperature >= 41) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
-    } else if (v.temperature < 35 || v.temperature >= 38.5) {
-      const isFeverWithSirs = v.temperature >= 38.5 && fcRange && frRange && (
+    } else if (v.temperature < 35.5 || v.temperature >= 38.5) {
+      const isFeverWithSirs = v.temperature >= 38.5 && (
         (v.heartRate && v.heartRate > fcRange.normal[1]) || 
         (v.respiratoryRate && v.respiratoryRate > frRange.normal[1])
       );
