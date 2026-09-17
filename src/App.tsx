@@ -25,7 +25,8 @@ import {
   Trash2,
   Check,
   AlertTriangle,
-  ShieldCheck
+  ShieldCheck,
+  Zap
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
@@ -157,25 +158,33 @@ export const ClinicalCriterionCard: React.FC<{
   selected,
   onToggle
 }) => {
+  const levelSelectionStyles: Record<CTASLevel, string> = {
+    1: "bg-red-50 border-red-600 text-red-950 ring-2 ring-red-500 shadow-md",
+    2: "bg-orange-50 border-orange-600 text-orange-950 ring-2 ring-orange-500 shadow-md",
+    3: "bg-amber-50 border-amber-500 text-amber-950 ring-2 ring-amber-400 shadow-md",
+    4: "bg-emerald-50 border-emerald-600 text-emerald-950 ring-2 ring-emerald-500 shadow-md",
+    5: "bg-blue-50 border-blue-600 text-blue-950 ring-2 ring-blue-500 shadow-md",
+  };
+
   return (
     <div
       onClick={onToggle}
       className={cn(
         "w-full self-start rounded-xl border p-3 text-left shadow-[0_3px_10px_rgba(15,23,42,0.05)] cursor-pointer select-none transition-all active:scale-[0.98]",
         selected
-          ? "bg-blue-50 border-blue-600 text-blue-900 ring-1 ring-blue-600 shadow-blue-50/50 scale-[1.01]"
+          ? levelSelectionStyles[criterion.level] || "bg-blue-50 border-blue-600 text-blue-900 ring-1 ring-blue-600"
           : "bg-white border-slate-200/80 text-slate-700 hover:border-slate-350 hover:bg-slate-50/50"
       )}
     >
       <div className="flex w-full items-start gap-3 text-left">
-        <p className="min-w-0 flex-1 text-left text-sm font-medium leading-snug text-slate-800 break-words">
+        <p className="min-w-0 flex-1 text-left text-sm font-semibold leading-snug break-words">
           {criterion.label}
         </p>
         <input 
           type="radio" 
           checked={selected} 
           readOnly 
-          className="mt-1 shrink-0 h-4 w-4 text-blue-600 border-slate-300 rounded-full focus:ring-blue-500 accent-blue-600 cursor-pointer" 
+          className="mt-1 shrink-0 h-4 w-4 border-slate-300 rounded-full cursor-pointer accent-blue-600" 
         />
       </div>
     </div>
@@ -258,6 +267,9 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(new Date());
   
   const [showAlertModal, setShowAlertModal] = useState(false);
+  const [tepAlertLevelShown, setTepAlertLevelShown] = useState<number>(0);
+  const [tepModalLevel, setTepModalLevel] = useState<number>(2);
+  const [showAbnormalVitalModal, setShowAbnormalVitalModal] = useState(false);
   const [showAgeWarningModal, setShowAgeWarningModal] = useState(false);
   const [showFindingsAlert, setShowFindingsAlert] = useState(false);
   const [findingsAlertDismissed, setFindingsAlertDismissed] = useState(false);
@@ -484,14 +496,86 @@ export default function App() {
   }, [patient.tepStates]);
 
   useEffect(() => {
-    if (alteredTepCount >= 2) {
-      if (!tepAlertDismissed && !showAlertModal) {
+    if (alteredTepCount === 3) {
+      if (tepAlertLevelShown < 3 && !showAlertModal) {
+        setTepModalLevel(3);
         setShowAlertModal(true);
       }
-    } else {
-      setTepAlertDismissed(false);
+    } else if (alteredTepCount === 2) {
+      if (tepAlertLevelShown < 2 && !showAlertModal) {
+        setTepModalLevel(2);
+        setShowAlertModal(true);
+      }
+    } else if (alteredTepCount < 2) {
+      setTepAlertLevelShown(0);
     }
-  }, [alteredTepCount, tepAlertDismissed, showAlertModal]);
+  }, [alteredTepCount, tepAlertLevelShown, showAlertModal]);
+
+  // Abnormal vitals detection for SpO2, Temperature and Glucose
+  const abnormalVitalsList = useMemo(() => {
+    const v = patient.vitals;
+    if (!v) return [];
+    const list: { type: 'temp' | 'spo2' | 'glucose'; title: string; valStr: string; text: string; suggestionSystem: string; suggestionDesc: string }[] = [];
+
+    if (v.temperature !== undefined && v.temperature !== null && !isNaN(v.temperature)) {
+      if (v.temperature >= 38.5) {
+        list.push({
+          type: 'temp',
+          title: 'Fiebre Elevada',
+          valStr: `${v.temperature} °C`,
+          text: `Fiebre significativa (${v.temperature} °C ≥ 38.5 °C).`,
+          suggestionSystem: 'infectologico',
+          suggestionDesc: 'Considere evaluar el Síndrome Febril en el Sistema Infectológico si la fiebre es el problema clínico principal.'
+        });
+      } else if (v.temperature < 35.5) {
+        list.push({
+          type: 'temp',
+          title: 'Hipotermia',
+          valStr: `${v.temperature} °C`,
+          text: `Hipotermia detectada (${v.temperature} °C < 35.5 °C).`,
+          suggestionSystem: 'infectologico',
+          suggestionDesc: 'Considere compromiso sistémico o sepsis en Infectológico o Endocrinológico.'
+        });
+      }
+    }
+
+    if (v.oxygenSaturation !== undefined && v.oxygenSaturation !== null && !isNaN(v.oxygenSaturation)) {
+      if (v.oxygenSaturation < 94) {
+        list.push({
+          type: 'spo2',
+          title: 'Desaturación de Oxígeno',
+          valStr: `${v.oxygenSaturation} %`,
+          text: `SpO2 alterada (${v.oxygenSaturation} % < 94%).`,
+          suggestionSystem: 'respiratorio',
+          suggestionDesc: 'Considere dificultad respiratoria en Sistema Respiratorio si el paciente requiere oxígeno o presenta compromiso ventilatorio.'
+        });
+      }
+    }
+
+    if (v.glucose !== undefined && v.glucose !== null && !isNaN(v.glucose)) {
+      if (v.glucose < 60) {
+        list.push({
+          type: 'glucose',
+          title: 'Hipoglucemia Aguda',
+          valStr: `${v.glucose} mg/dL`,
+          text: `Glucemia baja crítica (${v.glucose} mg/dL < 60 mg/dL).`,
+          suggestionSystem: 'endocrinologico',
+          suggestionDesc: 'Considere síndrome de Hipoglucemia en Sistema Endocrino / Metabólico.'
+        });
+      } else if (v.glucose > 250) {
+        list.push({
+          type: 'glucose',
+          title: 'Hiperglucemia Marcada',
+          valStr: `${v.glucose} mg/dL`,
+          text: `Glucemia elevada (${v.glucose} mg/dL > 250 mg/dL).`,
+          suggestionSystem: 'endocrinologico',
+          suggestionDesc: 'Considere sospecha de descompensación metabólica en Sistema Endocrino / Metabólico.'
+        });
+      }
+    }
+
+    return list;
+  }, [patient.vitals]);
 
   const getVitalsRequirements = () => {
     return getVitalsRequirementsByLevel(currentTriage.level);
@@ -535,7 +619,16 @@ export default function App() {
     return true;
   };
 
+  const handleImmediateShockRoom = () => {
+    setValidationError(null);
+    setStep(5);
+  };
+
   const handleNext = () => {
+    if (currentTriage.level === 'I') {
+      setValidationError("Paciente clasificado en Nivel I (Rojo · Resucitación Inmediata): El avance de rutina está bloqueado. Use el botón directo de Ingreso a Shock Room.");
+      return;
+    }
     if (isStepValid()) {
       if (step === 3 && !findingsAlertDismissed) {
         const hasHighAcuityFinding = patient.findings?.some(f => 
@@ -553,11 +646,12 @@ export default function App() {
   };
 
   const handleBack = () => {
+    setValidationError(null);
     setStep(s => Math.max(1, s - 1));
   };
 
   const finalizeTriage = async () => {
-    if (patient.estadoOperativo !== 'preliminar_critico') {
+    if (currentTriage.level !== 'I' && patient.estadoOperativo !== 'preliminar_critico') {
       if (!patient.findings || patient.findings.length !== 1) {
         setValidationError("Debe seleccionar un problema principal / discriminador clínico antes de cerrar el triaje.");
         return;
@@ -598,7 +692,9 @@ export default function App() {
     setPatient(INITIAL_PATIENT);
     setStep(1);
     setTepAlertDismissed(false);
+    setTepAlertLevelShown(0);
     setShowAlertModal(false);
+    setShowAbnormalVitalModal(false);
     setShowFindingsAlert(false);
     setFindingsAlertDismissed(false);
     setValidationError(null);
@@ -1010,6 +1106,73 @@ DESTINO SUGERIDO: ${triage.destination}
                       Evalúe cada lado del triángulo de forma independiente seleccionando los hallazgos clínicos observados:
                     </p>
 
+                    {/* Banner de Estado Visual TEP y Jerarquía */}
+                    <div className={cn(
+                      "p-4 rounded-2xl border-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 transition-all",
+                      alteredTepCount === 3 ? "bg-red-50 border-red-400 text-red-950 shadow-md ring-2 ring-red-300" :
+                      alteredTepCount === 2 ? "bg-orange-50 border-orange-400 text-orange-950 shadow-md ring-2 ring-orange-300" :
+                      alteredTepCount === 1 ? "bg-amber-50 border-amber-300 text-amber-950" :
+                      "bg-emerald-50 border-emerald-300 text-emerald-950"
+                    )}>
+                      <div className="flex items-center gap-3.5">
+                        <div className={cn(
+                          "w-12 h-12 rounded-xl flex flex-col items-center justify-center font-black text-white shrink-0 shadow-sm",
+                          alteredTepCount === 3 ? "bg-red-600 animate-pulse" :
+                          alteredTepCount === 2 ? "bg-orange-500 animate-pulse" :
+                          alteredTepCount === 1 ? "bg-amber-500" :
+                          "bg-emerald-600"
+                        )}>
+                          <span className="text-[10px] uppercase font-bold tracking-tighter leading-none opacity-80">TEP</span>
+                          <span className="text-lg leading-tight">{alteredTepCount === 3 ? 'I' : alteredTepCount === 2 ? 'II' : alteredTepCount === 1 ? 'III' : 'OK'}</span>
+                        </div>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-black uppercase tracking-wide">
+                              {alteredTepCount === 0 ? 'Triángulo Normal / Estable' :
+                               alteredTepCount === 1 ? '1 Lado Alterado' :
+                               alteredTepCount === 2 ? '2 Lados Alterados' :
+                               '3 Lados Alterados'}
+                            </span>
+                            <span className={cn(
+                              "text-[10px] font-black uppercase px-2.5 py-0.5 rounded-full border",
+                              alteredTepCount === 3 ? "bg-red-100 text-red-900 border-red-300" :
+                              alteredTepCount === 2 ? "bg-orange-100 text-orange-900 border-orange-300" :
+                              alteredTepCount === 1 ? "bg-amber-100 text-amber-900 border-amber-300" :
+                              "bg-emerald-100 text-emerald-900 border-emerald-300"
+                            )}>
+                              {alteredTepCount === 3 ? 'Nivel I · Rojo (Resucitación Inmediata)' :
+                               alteredTepCount === 2 ? 'Nivel II · Naranja (Emergencia)' :
+                               alteredTepCount === 1 ? 'Nivel III · Amarillo (Urgente)' :
+                               'Verde · Sin Compromiso'}
+                            </span>
+                          </div>
+                          <p className="text-xs font-semibold text-slate-700 mt-1 leading-relaxed">
+                            {alteredTepCount === 3 ? '🚨 Los 3 lados están afectados (Fallo cardiopulmonar). Nivel I (Rojo). Requiere pase directo a Shock Room.' :
+                             alteredTepCount === 2 ? '⚠️ 2 lados afectados (Dificultad o Shock descompensado). Nivel II (Naranja). Requiere atención de emergencia en ≤ 15 min.' :
+                             alteredTepCount === 1 ? '1 lado afectado (Dificultad aislada). Nivel III (Amarillo). Requiere atención urgente en ≤ 30 min.' :
+                             'Apariencia, respiración y circulación estables.'}
+                          </p>
+                        </div>
+                      </div>
+
+                      {alteredTepCount >= 2 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTepModalLevel(alteredTepCount === 3 ? 3 : 2);
+                            setShowAlertModal(true);
+                          }}
+                          className={cn(
+                            "px-3.5 py-2 text-white rounded-xl text-xs font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95",
+                            alteredTepCount === 3 ? "bg-red-600 hover:bg-red-700 shadow-red-200" : "bg-orange-500 hover:bg-orange-600 shadow-orange-200"
+                          )}
+                        >
+                          <AlertTriangle size={14} />
+                          Ver Alerta ({alteredTepCount === 3 ? 'Rojo' : 'Naranja'})
+                        </button>
+                      )}
+                    </div>
+
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                       {[
                         { 
@@ -1150,6 +1313,31 @@ DESTINO SUGERIDO: ${triage.destination}
                         </span>
                       </div>
 
+                      {/* Banner de Gravedad Protegida si TEP o Signos ya determinaron un nivel alto */}
+                      {(() => {
+                        const tepLados = getTepLadosAlterados(patient);
+                        if (tepLados >= 2) {
+                          const levelName = tepLados === 3 ? 'Nivel I · Resucitación (Rojo)' : 'Nivel II · Emergencia (Naranja)';
+                          return (
+                            <div className={cn(
+                              "p-4 rounded-2xl border-2 flex items-start gap-3 text-xs",
+                              tepLados === 3 ? "bg-red-50 border-red-300 text-red-950" : "bg-orange-50 border-orange-300 text-orange-950"
+                            )}>
+                              <ShieldAlert size={22} className={cn("shrink-0 mt-0.5", tepLados === 3 ? "text-red-600" : "text-orange-600")} />
+                              <div>
+                                <span className="font-black uppercase tracking-wide block text-sm">
+                                  🛡️ Gravedad Clínica Protegida: {levelName}
+                                </span>
+                                <p className="font-semibold mt-0.5 leading-relaxed">
+                                  El paciente tiene {tepLados} lados del TEP alterados. La selección de un motivo de consulta leve (Nivel IV Verde o Nivel V Azul) <strong>no rebajará</strong> la prioridad global del paciente. El triaje mantendrá el nivel más severo por seguridad clínica.
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        }
+                        return null;
+                      })()}
+
                       {/* Selector de Sistemas Clínicos para el Problema Principal - LISTA DESPLEGABLE */}
                       <div className="space-y-2 max-w-sm">
                         <div className="relative">
@@ -1223,6 +1411,40 @@ DESTINO SUGERIDO: ${triage.destination}
                       </span>
                     </div>
 
+                    {/* Banner Informativo de Ayuda Clínica para Signos Anormales (Temp, SpO2, Glucemia) */}
+                    {abnormalVitalsList.length > 0 && (
+                      <div className="p-4 rounded-2xl bg-amber-50 border-2 border-amber-300 text-amber-950 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+                        <div className="flex items-start gap-3">
+                          <div className="p-2 bg-amber-200 text-amber-900 rounded-xl shrink-0 mt-0.5 md:mt-0">
+                            <AlertTriangle size={22} className="animate-pulse" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-xs font-black uppercase tracking-wider text-amber-900">
+                                Signos de Alerta Fisiológica Detectados
+                              </span>
+                              <span className="text-[10px] font-black bg-amber-200 text-amber-950 px-2 py-0.5 rounded-full">
+                                {abnormalVitalsList.length} parámetro(s)
+                              </span>
+                            </div>
+                            <p className="text-xs font-semibold text-amber-900 mt-1 leading-relaxed">
+                              {abnormalVitalsList.map(a => `${a.title}: ${a.valStr}`).join(' · ')}. 
+                              Estos valores no asignan gravedad automáticamente: asisten al criterio de enfermería para definir el motivo clínico.
+                            </p>
+                          </div>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowAbnormalVitalModal(true)}
+                          className="w-full md:w-auto px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black shrink-0 transition-all flex items-center justify-center gap-2 cursor-pointer shadow-md shadow-amber-200 active:scale-95"
+                        >
+                          <AlertTriangle size={15} />
+                          ⚠️ Signo Anormal Detectado: Opciones
+                        </button>
+                      </div>
+                    )}
+
                     {/* Grid de Signos Vitales Físicos */}
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                       {(() => {
@@ -1258,16 +1480,16 @@ DESTINO SUGERIDO: ${triage.destination}
                           if (key === 'diastolicBP') {
                             const effectiveAge = ageMonths !== undefined ? ageMonths : 216;
                             if (effectiveAge >= 216) {
-                              if (val < 40 || val >= 120) return { label: 'Crítica (<40 o ≥120)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
-                              if (val < 50 || val >= 90) return { label: val < 50 ? 'Hipotensión' : 'Hipertensión', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
-                              if (val >= 81 && val <= 89) return { label: 'Prehipertensión', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
-                              return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
+                              if (val < 40 || val >= 110) return { label: val < 40 ? 'PAD Crítica (<40)' : 'PAD Crítica (≥110)', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
+                              if (val < 50 || val >= 90) return { label: val < 50 ? 'Hipotensión (<50)' : 'Hipertensión (≥90)', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                              if (val < 60 || (val >= 80 && val <= 89)) return { label: val < 60 ? 'PAD Baja (50-59)' : 'Prehipertensión (80-89)', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                              return { label: 'Normal (60-79)', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
                             } else {
-                              const minPAD = effectiveAge <= 12 ? 40 : effectiveAge <= 60 ? 50 : effectiveAge <= 144 ? 55 : 60;
-                              const maxPAD = effectiveAge <= 12 ? 60 : effectiveAge <= 60 ? 70 : effectiveAge <= 144 ? 80 : 85;
+                              const minPAD = effectiveAge <= 12 ? 40 : effectiveAge <= 60 ? 45 : effectiveAge <= 144 ? 55 : 60;
+                              const maxPAD = effectiveAge <= 12 ? 60 : effectiveAge <= 60 ? 65 : effectiveAge <= 144 ? 75 : 80;
                               if (val < minPAD - 10 || val > maxPAD + 25) return { label: 'PAD Crítica', colorClass: 'bg-red-100 text-red-800 border-red-200 font-extrabold', key: 'critico' };
-                              if (val < minPAD || val > maxPAD + 10) return { label: val < minPAD ? 'PAD Baja' : 'PAD Alta', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
-                              if (val > maxPAD) return { label: 'PAD Elevada', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
+                              if (val < minPAD - 5 || val > maxPAD + 10) return { label: val < minPAD - 5 ? 'PAD Muy Baja' : 'PAD Alta', colorClass: 'bg-orange-100 text-orange-800 border-orange-200 font-bold', key: 'alto' };
+                              if (val < minPAD || val > maxPAD) return { label: val < minPAD ? 'PAD Baja' : 'PAD Elevada', colorClass: 'bg-yellow-100 text-yellow-800 border-yellow-200 font-bold', key: 'elevado' };
                               return { label: 'Normal', colorClass: 'bg-emerald-100 text-emerald-800 border-emerald-200 font-semibold', key: 'normal' };
                             }
                           }
@@ -1535,7 +1757,17 @@ DESTINO SUGERIDO: ${triage.destination}
                   </button>
                 )}
                 <div className="flex-1" />
-                {step < 5 ? (
+                {currentTriage.level === 'I' && step < 5 ? (
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                    <button 
+                      onClick={handleImmediateShockRoom}
+                      className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-8 py-3.5 rounded-xl font-black text-base shadow-xl shadow-red-200 animate-pulse transition-all cursor-pointer select-none active:scale-95"
+                    >
+                      <Zap size={20} />
+                      🚨 Ingresar a Shock Room (Nivel I)
+                    </button>
+                  </div>
+                ) : step < 5 ? (
                   <button 
                     onClick={handleNext}
                     disabled={!isStepValid()}
@@ -1941,33 +2173,43 @@ DESTINO SUGERIDO: ${triage.destination}
               exit={{ scale: 0.95, opacity: 0 }}
               className="bg-white rounded-3xl overflow-hidden shadow-2xl max-w-lg w-full border border-slate-100"
             >
-              {/* Encabezado: Color de fondo Rojo Vivo (bg-red-600), Icono de Alerta de Peligro (AlertCircle) y texto */}
-              <div className="bg-red-600 p-6 text-white flex items-center gap-3">
+              {/* Encabezado: Rojo para 3 lados (Nivel I), Naranja para 2 lados (Nivel II) */}
+              <div className={cn(
+                "p-6 text-white flex items-center gap-3",
+                tepModalLevel === 3 ? "bg-red-600" : "bg-orange-500"
+              )}>
                 <div className="p-2 bg-white/25 rounded-2xl">
                   <AlertCircle size={28} className="text-white animate-pulse" />
                 </div>
                 <div>
-                  <span className="text-[10px] font-black tracking-widest uppercase text-white/80 block">Seguridad del Paciente</span>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-white/80 block">
+                    {tepModalLevel === 3 ? '🚨 ALERTA CRÍTICA · NIVEL I' : '⚠️ ALERTA DE EMERGENCIA · NIVEL II'}
+                  </span>
                   <h3 className="text-base font-black tracking-tight uppercase">
-                    ¡ALERTA: SITUACIÓN DE RIESGO!
+                    {tepModalLevel === 3 ? 'TEP: 3 LADOS ALTERADOS (RESUCITACIÓN)' : 'TEP: 2 LADOS ALTERADOS (EMERGENCIA)'}
                   </h3>
                 </div>
               </div>
 
               {/* Mensaje Central */}
               <div className="p-6 space-y-4">
-                <div className="p-4 bg-red-50 border border-red-100 rounded-2xl">
-                  <p className="text-sm font-bold text-red-900 leading-relaxed">
-                    Se ha identificado una situación de riesgo. El Triángulo de Evaluación Pediátrico (TEP) presenta alteración en 2 o más lados. El paciente requiere atención inmediata.
+                <div className={cn(
+                  "p-4 border rounded-2xl",
+                  tepModalLevel === 3 ? "bg-red-50 border-red-200 text-red-950" : "bg-orange-50 border-orange-200 text-orange-950"
+                )}>
+                  <p className="text-sm font-bold leading-relaxed">
+                    {tepModalLevel === 3
+                      ? 'Se han alterado los 3 lados del TEP (Fallo cardiopulmonar / Resucitación). El paciente se clasifica en Nivel I (Rojo). Requiere pase prioritario directo a Shock Room.'
+                      : 'Se han alterado 2 lados del TEP (Dificultad o Shock descompensado). El paciente se clasifica en Nivel II (Naranja - Emergencia, atención en ≤ 15 min).'}
                   </p>
                 </div>
 
                 <div className="space-y-2">
-                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">Lados alterados identificados:</span>
+                  <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-400 block">Lados alterados identificados ({tepModalLevel}):</span>
                   <div className="flex flex-wrap gap-2">
                     {getTepLadosList(patient).map((lado, idx) => (
                       <span key={idx} className="text-xs font-bold bg-slate-100 text-slate-700 px-3 py-1.5 rounded-xl border border-slate-200 flex items-center gap-1.5 justify-center">
-                        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-ping" /> {lado}
+                        <span className={cn("w-2 h-2 rounded-full animate-ping", tepModalLevel === 3 ? "bg-red-500" : "bg-orange-500")} /> {lado}
                       </span>
                     ))}
                   </div>
@@ -1975,16 +2217,118 @@ DESTINO SUGERIDO: ${triage.destination}
               </div>
 
               {/* Acciones */}
-              <div className="bg-slate-50 px-6 py-4 flex justify-end border-t border-slate-100">
+              <div className="bg-slate-50 px-6 py-4 flex flex-col sm:flex-row gap-2 sm:justify-end border-t border-slate-100">
+                {tepModalLevel === 3 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAlertModal(false);
+                      setTepAlertLevelShown(3);
+                      setStep(5);
+                    }}
+                    className="px-6 py-3 rounded-xl text-white bg-red-600 hover:bg-red-700 font-black text-sm tracking-wide transition-all shadow-lg shadow-red-200 active:scale-95 cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <Zap size={16} />
+                    Ingresar a Shock Room Ahora
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowAlertModal(false);
+                      setTepAlertLevelShown(2);
+                    }}
+                    className="px-6 py-3 rounded-xl text-white bg-orange-500 hover:bg-orange-600 font-black text-sm tracking-wide transition-all shadow-lg shadow-orange-200 active:scale-95 cursor-pointer"
+                  >
+                    Aceptar / Continuar evaluación
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {/* Modal de Signos Anormales Detectados (Temp, SpO2, Glucemia) */}
+        {showAbnormalVitalModal && (
+          <motion.div
+            key="abnormal-vitals-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl overflow-hidden shadow-2xl max-w-xl w-full border border-slate-100"
+            >
+              {/* Header */}
+              <div className="bg-amber-500 p-6 text-white flex items-center gap-3">
+                <div className="p-2 bg-white/25 rounded-2xl">
+                  <AlertTriangle size={28} className="text-white animate-pulse" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-white/90 block">
+                    Ayuda Clínica al Profesional
+                  </span>
+                  <h3 className="text-base font-black tracking-tight uppercase">
+                    ⚠️ Signos Anormales Detectados
+                  </h3>
+                </div>
+              </div>
+
+              {/* Contenido */}
+              <div className="p-6 space-y-4">
+                <p className="text-sm font-medium text-slate-700 leading-relaxed">
+                  Se han registrado constantes fisiológicas fuera de rango estándar. Conforme a las directrices clínicas, la <strong>Temperatura, SpO2 y Glucemia no asignan gravedad automáticamente</strong>: es el problema clínico seleccionado por enfermería el que define el nivel de triaje.
+                </p>
+
+                <div className="space-y-2.5">
+                  {abnormalVitalsList.map((item, idx) => (
+                    <div key={idx} className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-2xl space-y-1">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-black text-amber-900 uppercase tracking-wide">
+                          {item.title}
+                        </span>
+                        <span className="text-xs font-black font-mono bg-amber-200 text-amber-950 px-2 py-0.5 rounded-lg">
+                          {item.valStr}
+                        </span>
+                      </div>
+                      <p className="text-xs text-amber-900 font-medium">
+                        {item.text}
+                      </p>
+                      <p className="text-xs text-slate-600 font-semibold bg-white p-2 rounded-xl border border-amber-100 mt-1">
+                        💡 <strong>Sugerencia clínica:</strong> {item.suggestionDesc}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Acciones */}
+              <div className="bg-slate-50 p-6 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowAbnormalVitalModal(false)}
+                  className="w-full sm:w-auto px-5 py-3 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs tracking-wide transition-all cursor-pointer text-center"
+                >
+                  Continuar con el mismo motivo
+                </button>
                 <button
                   type="button"
                   onClick={() => {
-                    setShowAlertModal(false);
-                    setTepAlertDismissed(true);
+                    setShowAbnormalVitalModal(false);
+                    const firstSuggestion = abnormalVitalsList[0]?.suggestionSystem;
+                    if (firstSuggestion) {
+                      setSelectedSystemId(firstSuggestion);
+                    }
+                    setStep(3);
                   }}
-                  className="w-full sm:w-auto px-6 py-3 rounded-xl text-white bg-red-600 hover:bg-red-700 font-bold text-sm tracking-wide transition-all shadow-lg shadow-red-200 active:scale-95 cursor-pointer"
+                  className="w-full sm:w-auto px-5 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-black text-xs tracking-wide transition-all shadow-md shadow-blue-200 flex items-center justify-center gap-1.5 cursor-pointer text-center active:scale-95"
                 >
-                  Aceptar / Continuar evaluación
+                  <Stethoscope size={16} />
+                  Revisar / Cambiar Motivo Clínico (Paso 3)
                 </button>
               </div>
             </motion.div>

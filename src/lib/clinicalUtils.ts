@@ -127,7 +127,22 @@ export const calculateTriage = (
     suggestedLevelValue = 1;
   }
 
-  // --- 2. AVPU Neurological Modifier ---
+  // --- 2. Triángulo de Evaluación Pediátrica (TEP) ---
+  // 3 lados afectados -> Nivel I (Rojo)
+  // 2 lados afectados -> Nivel II (Naranja)
+  // 1 lado afectado -> Nivel III (Amarillo)
+  if (data.type === 'pediatric' && data.tepStates) {
+    const lados = getTepLadosAlterados(data);
+    if (lados === 3) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+    } else if (lados === 2) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+    } else if (lados === 1) {
+      suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+    }
+  }
+
+  // --- 3. AVPU Neurological Modifier ---
   if (v.avpu !== undefined) {
     if (v.avpu === 'U') {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
@@ -138,23 +153,14 @@ export const calculateTriage = (
     }
   }
 
-  // --- 3. Oxygen Saturation Modifier ---
-  if (v.oxygenSaturation !== undefined) {
-    if (v.oxygenSaturation < 92) {
-      suggestedLevelValue = Math.min(suggestedLevelValue, 1);
-    } else if (v.oxygenSaturation >= 92 && v.oxygenSaturation <= 94) {
-      suggestedLevelValue = Math.min(suggestedLevelValue, 2);
-    } else if (v.oxygenSaturation >= 95 && v.oxygenSaturation <= 96) {
-      suggestedLevelValue = Math.min(suggestedLevelValue, 3);
-    }
-  }
-
-  // --- 4. Hemodynamics & Vital Signs Modifiers ---
+  // --- 4. Hemodynamics & Vital Signs Modifiers (SOLO FC, FR, TA) ---
+  // NOTA CLÍNICA: La Temperatura, SpO2 y Glucemia NO modifican directamente la gravedad
+  // del paciente; emiten alerta informativa para que el enfermero clasifique el problema en el paso 3.
   const effectiveAge = ageMonths !== undefined ? ageMonths : 216;
   const frRange = getVitalsRange(effectiveAge, 'FR');
   const fcRange = getVitalsRange(effectiveAge, 'FC');
 
-  // Respiratory Rate
+  // Respiratory Rate (FR)
   if (v.respiratoryRate !== undefined) {
     if (v.respiratoryRate > frRange.d2[1] || v.respiratoryRate < frRange.normal[0] * 0.4) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
@@ -165,7 +171,7 @@ export const calculateTriage = (
     }
   }
 
-  // Heart Rate
+  // Heart Rate (FC)
   if (v.heartRate !== undefined) {
     if (v.heartRate > fcRange.d2[1] || v.heartRate < fcRange.normal[0] * 0.4) {
       suggestedLevelValue = Math.min(suggestedLevelValue, 1);
@@ -176,7 +182,7 @@ export const calculateTriage = (
     }
   }
 
-  // Blood Pressure (Systolic)
+  // Blood Pressure (Systolic - PAS)
   if (v.systolicBP !== undefined) {
     if (effectiveAge >= 216) {
       if (v.systolicBP < 80 || v.systolicBP >= 180) {
@@ -199,33 +205,30 @@ export const calculateTriage = (
     }
   }
 
-  // --- 5. Temperature Modifiers ---
-  if (v.temperature !== undefined) {
-    if (v.temperature < 32 || v.temperature >= 41) {
-      suggestedLevelValue = Math.min(suggestedLevelValue, 1);
-    } else if (v.temperature < 35.5 || v.temperature >= 38.5) {
-      const isFeverWithSirs = v.temperature >= 38.5 && (
-        (v.heartRate && v.heartRate > fcRange.normal[1]) || 
-        (v.respiratoryRate && v.respiratoryRate > frRange.normal[1])
-      );
-      if (isFeverWithSirs) {
+  // Blood Pressure (Diastolic - PAD)
+  if (v.diastolicBP !== undefined) {
+    if (effectiveAge >= 216) {
+      if (v.diastolicBP < 40 || v.diastolicBP >= 110) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.diastolicBP < 50 || v.diastolicBP >= 90) {
         suggestedLevelValue = Math.min(suggestedLevelValue, 2);
-      } else {
+      } else if (v.diastolicBP < 60 || (v.diastolicBP >= 80 && v.diastolicBP <= 89)) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 3);
+      }
+    } else {
+      const minPAD = effectiveAge <= 12 ? 40 : effectiveAge <= 60 ? 45 : effectiveAge <= 144 ? 55 : 60;
+      const maxPAD = effectiveAge <= 12 ? 60 : effectiveAge <= 60 ? 65 : effectiveAge <= 144 ? 75 : 80;
+      if (v.diastolicBP < minPAD - 10 || v.diastolicBP > maxPAD + 25) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 1);
+      } else if (v.diastolicBP < minPAD - 5 || v.diastolicBP > maxPAD + 10) {
+        suggestedLevelValue = Math.min(suggestedLevelValue, 2);
+      } else if (v.diastolicBP < minPAD || v.diastolicBP > maxPAD) {
         suggestedLevelValue = Math.min(suggestedLevelValue, 3);
       }
     }
   }
 
-  // --- 6. Glucose Modifier ---
-  if (v.glucose !== undefined) {
-    if (v.glucose < 40 || v.glucose > 500) {
-      suggestedLevelValue = Math.min(suggestedLevelValue, 2);
-    } else if (v.glucose < 65 || v.glucose > 250) {
-      suggestedLevelValue = Math.min(suggestedLevelValue, 3);
-    }
-  }
-
-  // --- 7. Clinical Findings / Discriminators Modifiers ---
+  // --- 5. Clinical Findings / Discriminators Modifiers ---
   if (data.findings?.some(f => FINDINGS.LEVEL_I.includes(f))) {
     suggestedLevelValue = Math.min(suggestedLevelValue, 1);
   }
