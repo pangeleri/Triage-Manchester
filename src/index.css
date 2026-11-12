@@ -1,9 +1,9 @@
-@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
-  --font-sans: "Open Sans", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Inter", ui-sans-serif, system-ui, sans-serif;
   --color-blue-50: #f4f5fc;
   --color-blue-100: #e8eaf7;
   --color-blue-200: #d5d9f1;
@@ -19,14 +19,18 @@
 
 @layer base {
   html {
-    font-size: 18px;
+    font-size: 16px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
   body, button, input, textarea, select, label, option {
-    font-family: "Open Sans", ui-sans-serif, system-ui, sans-serif !important;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+    letter-spacing: -0.011em;
   }
   body {
-    background-color: #999999;
-    background-image: radial-gradient(rgba(255, 255, 255, 0.15) 1px, transparent 1px);
+    background-color: #f1f5f9;
+    background-image: radial-gradient(rgba(148, 163, 184, 0.18) 1px, transparent 1px);
     background-size: 24px 24px;
     @apply text-slate-900 font-sans antialiased;
   }
@@ -78,5 +82,3 @@
     animation: none !important;
   }
 }
-
-

@@ -26,20 +26,28 @@ import {
   Check,
   AlertTriangle,
   ShieldCheck,
-  Zap
+  Zap,
+  LogOut,
+  UserCircle2,
+  RotateCcw,
+  X,
+  Search,
+  BookOpen,
+  HelpCircle
 } from 'lucide-react';
+import { useAuth, ROL_ETIQUETA } from './lib/auth';
 import { motion, AnimatePresence } from 'motion/react';
 import { jsPDF } from 'jspdf';
 import { format, differenceInMinutes, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from './lib/utils';
-import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle, CLINICAL_SYSTEMS, ClinicalSystem, ReevaluacionData, EstadoOperativo } from './types';
-import { isSupabaseConfigured, saveTriageRecord, fetchTriageRecords, saveReevaluation, updateOperationalState, supabase } from './lib/supabase';
+import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle, CLINICAL_SYSTEMS, ClinicalSystem, ReevaluacionData, EstadoOperativo, CorreccionData, ESTADOS_CORREGIBLES, findFindingMeta, PAED_CTAS_ABBREVIATIONS } from './types';
+import { isSupabaseConfigured, saveTriageRecord, fetchTriageRecords, saveReevaluation, updateOperationalState, saveCorrection, supabase } from './lib/supabase';
 import { getVitalsRange, getVitalsDSLabel, getTepLadosAlterados, getTepLadosList, getVitalsRequirementsByLevel, calculateTriage } from './lib/clinicalUtils';
 
 // --- Constants & Helpers ---
 
-const INITIAL_VITALS: VitalSigns = {
+export const createCleanVitals = (): VitalSigns => ({
   heartRate: undefined,
   respiratoryRate: undefined,
   systolicBP: undefined,
@@ -50,11 +58,11 @@ const INITIAL_VITALS: VitalSigns = {
   avpu: 'A',
   condicionMedicionSpo2: 'aire_ambiente',
   metodoTemperatura: 'axilar',
-};
+});
 
-const INITIAL_TEP: PediatricTriangle = {
+export const createCleanTep = (): PediatricTriangle => ({
   appearance: {
-    normal: false,
+    normal: true,
     abnormalActivity: false,
     unresponsive: false,
     abnormalVisualContact: false,
@@ -63,7 +71,7 @@ const INITIAL_TEP: PediatricTriangle = {
     abnormalTone: false,
   },
   respiration: {
-    normal: false,
+    normal: true,
     agitation: false,
     apnea: false,
     abnormalPosition: false,
@@ -71,28 +79,28 @@ const INITIAL_TEP: PediatricTriangle = {
     retractions: false,
   },
   circulation: {
-    normal: false,
+    normal: true,
     cyanosis: false,
     mottled: false,
     pallor: false,
     flushing: false,
   },
-};
+});
 
-const INITIAL_PATIENT: Partial<PatientData> = {
+export const createCleanPatient = (): Partial<PatientData> => ({
   name: '',
   age: undefined,
   ageUnit: 'años',
   gender: 'M',
   documentId: '',
   type: 'pediatric',
-  tep: INITIAL_TEP,
+  tep: createCleanTep(),
   tepStates: {
     apariencia: 'normal',
     respiracion: 'normal',
     circulacion: 'normal',
   },
-  vitals: INITIAL_VITALS,
+  vitals: createCleanVitals(),
   findings: [],
   otherSymptoms: '',
   estadoOperativo: 'en_espera',
@@ -101,7 +109,11 @@ const INITIAL_PATIENT: Partial<PatientData> = {
   nombreAcompanante: '',
   telefonoAcompanante: '',
   parentescoAcompanante: '',
-};
+});
+
+const INITIAL_VITALS: VitalSigns = createCleanVitals();
+const INITIAL_TEP: PediatricTriangle = createCleanTep();
+const INITIAL_PATIENT: Partial<PatientData> = createCleanPatient();
 
 // --- CTASMatrix Components and Types ---
 export type CTASLevel = 1 | 2 | 3 | 4 | 5;
@@ -181,10 +193,10 @@ export const ClinicalCriterionCard: React.FC<{
           {criterion.label}
         </p>
         <input 
-          type="radio" 
+          type="checkbox" 
           checked={selected} 
           readOnly 
-          className="mt-1 shrink-0 h-4 w-4 border-slate-300 rounded-full cursor-pointer accent-blue-600" 
+          className="mt-1 shrink-0 h-4 w-4 border-slate-300 rounded cursor-pointer accent-blue-600" 
         />
       </div>
     </div>
@@ -240,14 +252,20 @@ export const CTASMatrix = ({
                 />
 
                 <div className="flex flex-col items-stretch justify-start gap-3">
-                  {criteriaByLevel[column.level].map((criterion) => (
-                    <ClinicalCriterionCard
-                      key={criterion.id}
-                      criterion={criterion}
-                      selected={selectedCriterionIds.includes(criterion.id)}
-                      onToggle={() => onToggleCriterion(criterion.id)}
-                    />
-                  ))}
+                  {criteriaByLevel[column.level].length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/60 p-4 text-center text-xs text-slate-400 italic select-none">
+                      Sin discriminadores en este nivel
+                    </div>
+                  ) : (
+                    criteriaByLevel[column.level].map((criterion) => (
+                      <ClinicalCriterionCard
+                        key={criterion.id}
+                        criterion={criterion}
+                        selected={selectedCriterionIds.includes(criterion.id)}
+                        onToggle={() => onToggleCriterion(criterion.id)}
+                      />
+                    ))
+                  )}
                 </div>
               </div>
             ))}
@@ -261,10 +279,17 @@ export const CTASMatrix = ({
 // --- Main Component ---
 
 export default function App() {
+  const { usuario: usuarioActual, salir } = useAuth();
   const [step, setStep] = useState(1);
-  const [patient, setPatient] = useState<Partial<PatientData>>(INITIAL_PATIENT);
+  const [maxStepReached, setMaxStepReached] = useState(1);
+  const [showResetModal, setShowResetModal] = useState(false);
+  const [patient, setPatient] = useState<Partial<PatientData>>(createCleanPatient);
   const [history, setHistory] = useState<PatientData[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    setMaxStepReached(prev => Math.max(prev, step));
+  }, [step]);
   
   const [showAlertModal, setShowAlertModal] = useState(false);
   const [tepAlertLevelShown, setTepAlertLevelShown] = useState<number>(0);
@@ -280,9 +305,16 @@ export default function App() {
   });
   const [tepAlertDismissed, setTepAlertDismissed] = useState(false);
   const [selectedSystemId, setSelectedSystemId] = useState(() => {
-    const sorted = [...CLINICAL_SYSTEMS].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' }));
-    return sorted[0]?.id || 'respiratorio';
+    return 'respiratorio';
   });
+  const [findingSearchQuery, setFindingSearchQuery] = useState('');
+  const [showAbbreviations, setShowAbbreviations] = useState(false);
+
+  // Corrección de un triaje ya finalizado (solo quien lo hizo, mientras el paciente no fue atendido)
+  const [editingRecord, setEditingRecord] = useState<PatientData | null>(null);
+  const [showCorrectionModal, setShowCorrectionModal] = useState(false);
+  const [correctionReason, setCorrectionReason] = useState('');
+  const [correctionError, setCorrectionError] = useState<string | null>(null);
 
   // Supabase Sync states
   const [dbSaving, setDbSaving] = useState(false);
@@ -525,7 +557,7 @@ export default function App() {
           valStr: `${v.temperature} °C`,
           text: `Fiebre significativa (${v.temperature} °C ≥ 38.5 °C).`,
           suggestionSystem: 'infectologico',
-          suggestionDesc: 'Considere evaluar el Síndrome Febril en el Sistema Infectológico si la fiebre es el problema clínico principal.'
+          suggestionDesc: 'Considere discriminadores en Infectológico (ej: "Fiebre en niño de 3-36 meses", "T° > 38 °C en menor de 3 meses", "Neutropenia febril" o "Aspecto séptico").'
         });
       } else if (v.temperature < 35.5) {
         list.push({
@@ -534,7 +566,7 @@ export default function App() {
           valStr: `${v.temperature} °C`,
           text: `Hipotermia detectada (${v.temperature} °C < 35.5 °C).`,
           suggestionSystem: 'infectologico',
-          suggestionDesc: 'Considere compromiso sistémico o sepsis en Infectológico o Endocrinológico.'
+          suggestionDesc: 'Considere el discriminador "Hipotermia" en Infectológico o "Injuria grave por frío, hipotermia" en Músculo-esquelético.'
         });
       }
     }
@@ -547,7 +579,7 @@ export default function App() {
           valStr: `${v.oxygenSaturation} %`,
           text: `SpO2 alterada (${v.oxygenSaturation} % < 94%).`,
           suggestionSystem: 'respiratorio',
-          suggestionDesc: 'Considere dificultad respiratoria en Sistema Respiratorio si el paciente requiere oxígeno o presenta compromiso ventilatorio.'
+          suggestionDesc: 'Considere discriminadores en Respiratorio (ej: "DR severa", "DR moderada", "DR leve" o "Disnea severa").'
         });
       }
     }
@@ -560,7 +592,7 @@ export default function App() {
           valStr: `${v.glucose} mg/dL`,
           text: `Glucemia baja crítica (${v.glucose} mg/dL < 60 mg/dL).`,
           suggestionSystem: 'endocrinologico',
-          suggestionDesc: 'Considere síndrome de Hipoglucemia en Sistema Endocrino / Metabólico.'
+          suggestionDesc: 'Considere "Diabetes mellitus con hipoglucemia" (Nivel III) en el Problema Endocrinológico.'
         });
       } else if (v.glucose > 250) {
         list.push({
@@ -569,7 +601,7 @@ export default function App() {
           valStr: `${v.glucose} mg/dL`,
           text: `Glucemia elevada (${v.glucose} mg/dL > 250 mg/dL).`,
           suggestionSystem: 'endocrinologico',
-          suggestionDesc: 'Considere sospecha de descompensación metabólica en Sistema Endocrino / Metabólico.'
+          suggestionDesc: 'Considere "Diabetes mellitus con CAD" (Nivel II) o "Diabetes mellitus con alteración del sensorio" (Nivel I) en Endocrinológico.'
         });
       }
     }
@@ -624,11 +656,79 @@ export default function App() {
     setStep(5);
   };
 
-  const handleNext = () => {
-    if (currentTriage.level === 'I') {
-      setValidationError("Paciente clasificado en Nivel I (Rojo · Resucitación Inmediata): El avance de rutina está bloqueado. Use el botón directo de Ingreso a Shock Room.");
-      return;
+  const handleUndoCurrentStep = () => {
+    setValidationError(null);
+    if (step === 1) {
+      setPatient(p => ({
+        ...p,
+        name: '',
+        age: undefined,
+        ageUnit: 'años',
+        gender: 'M',
+        documentId: '',
+        nombreAcompanante: '',
+        telefonoAcompanante: '',
+        parentescoAcompanante: ''
+      }));
+      setShowAgeWarningModal(false);
+    } else if (step === 2) {
+      setPatient(p => ({
+        ...p,
+        tep: createCleanTep(),
+        tepStates: {
+          apariencia: 'normal',
+          respiracion: 'normal',
+          circulacion: 'normal'
+        }
+      }));
+      setShowSpecifics({
+        apariencia: false,
+        respiracion: false,
+        circulacion: false
+      });
+      setTepAlertDismissed(false);
+      setTepAlertLevelShown(0);
+      setShowAlertModal(false);
+    } else if (step === 3) {
+      setPatient(p => ({
+        ...p,
+        findings: [],
+        otherSymptoms: ''
+      }));
+      setFindingSearchQuery('');
+      setShowFindingsAlert(false);
+      setFindingsAlertDismissed(false);
+    } else if (step === 4) {
+      setPatient(p => ({
+        ...p,
+        vitals: createCleanVitals()
+      }));
+      setShowAbnormalVitalModal(false);
+    } else if (step === 5) {
+      setStep(4);
     }
+  };
+
+  const resetEntireTriage = () => {
+    setPatient(createCleanPatient());
+    setStep(1);
+    setMaxStepReached(1);
+    setTepAlertDismissed(false);
+    setTepAlertLevelShown(0);
+    setShowAlertModal(false);
+    setShowAbnormalVitalModal(false);
+    setShowFindingsAlert(false);
+    setFindingsAlertDismissed(false);
+    setShowAgeWarningModal(false);
+    setShowSpecifics({ apariencia: false, respiracion: false, circulacion: false });
+    setFindingSearchQuery('');
+    setValidationError(null);
+    setEditingRecord(null);
+    setShowResetModal(false);
+  };
+
+  const handleNext = () => {
+    setValidationError(null);
     if (isStepValid()) {
       if (step === 3 && !findingsAlertDismissed) {
         const hasHighAcuityFinding = patient.findings?.some(f => 
@@ -650,15 +750,126 @@ export default function App() {
     setStep(s => Math.max(1, s - 1));
   };
 
+  const levelToNum = (l?: string) => ({ I: 1, II: 2, III: 3, IV: 4, V: 5 } as Record<string, number>)[l || 'V'] ?? 5;
+
+  /** Resumen clínico que se guarda como "antes" y "después" en cada corrección. */
+  const resumenClinico = (p: Partial<PatientData>) => ({
+    nivel: p.triageLevel,
+    nombre: p.name,
+    documento: p.documentId,
+    edad: p.age, unidadEdad: p.ageUnit,
+    tep: p.tepStates,
+    discriminadores: p.findings || [],
+    signos: p.vitals,
+    observaciones: p.otherSymptoms || ''
+  });
+
+  const puedeCorregir = (p: PatientData) =>
+    !!usuarioActual && !!p.creadoPor && p.creadoPor === usuarioActual.id &&
+    ESTADOS_CORREGIBLES.includes(p.estadoOperativo || 'en_espera');
+
+  const startCorrection = (p: PatientData) => {
+    setEditingRecord(p);
+    setPatient(JSON.parse(JSON.stringify(p)));
+    const primer = p.findings && p.findings[0] ? findFindingMeta(p.findings[0]) : null;
+    if (primer) setSelectedSystemId(primer.sistema);
+    setTepAlertDismissed(true);
+    setTepAlertLevelShown(3);
+    setFindingsAlertDismissed(true);
+    setValidationError(null);
+    setCorrectionReason('');
+    setStep(2);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const cancelCorrection = () => {
+    setEditingRecord(null);
+    setShowCorrectionModal(false);
+    setCorrectionReason('');
+    setPatient(createCleanPatient());
+    setTepAlertDismissed(false);
+    setTepAlertLevelShown(0);
+    setFindingsAlertDismissed(false);
+    setValidationError(null);
+    setStep(1);
+  };
+
+  const applyCorrection = async () => {
+    if (!editingRecord) return;
+    const motivo = correctionReason.trim();
+    if (motivo.length < 5) {
+      setCorrectionError('Escribí el motivo de la corrección (al menos 5 caracteres).');
+      return;
+    }
+    const ageMonths = patient.age !== undefined ? patient.age * (patient.ageUnit === 'años' ? 12 : 1) : undefined;
+    const levelMapMin: Record<string, number> = { 'I': 0, 'II': 15, 'III': 30, 'IV': 60, 'V': 120 };
+    const targetMin = levelMapMin[currentTriage.level] ?? 120;
+    const llegada = new Date(editingRecord.arrivalDate);
+    const corregido: PatientData = {
+      ...(patient as PatientData),
+      id: editingRecord.id,
+      arrivalDate: editingRecord.arrivalDate,
+      creadoPor: editingRecord.creadoPor,
+      creadoPorNombre: editingRecord.creadoPorNombre,
+      estadoOperativo: editingRecord.estadoOperativo,
+      nivelCtasSugerido: editingRecord.nivelCtasSugerido,
+      nivelCtasFinal: levelToNum(currentTriage.level),
+      triageLevel: currentTriage.level,
+      originalPriority: currentTriage.priority,
+      waitTime: currentTriage.wait,
+      suggestedDestination: currentTriage.destination,
+      objetivoEvaluacionMinutos: targetMin,
+      fechaObjetivoEvaluacion: new Date(llegada.getTime() + targetMin * 60000).toISOString(),
+      frecuenciaCardiacaDs: getVitalsDSLabel(patient.vitals?.heartRate, ageMonths, 'FC').key,
+      frecuenciaRespiratoriaDs: getVitalsDSLabel(patient.vitals?.respiratoryRate, ageMonths, 'FR').key,
+      reevaluaciones: editingRecord.reevaluaciones,
+    };
+    const correccion: CorreccionData = {
+      episodioId: editingRecord.id,
+      nivelPrevio: levelToNum(editingRecord.triageLevel),
+      nivelNuevo: levelToNum(currentTriage.level),
+      motivo,
+      datosPrevios: resumenClinico(editingRecord),
+      datosNuevos: resumenClinico(corregido),
+      corregidoPor: usuarioActual?.id,
+      corregidoPorNombre: usuarioActual?.nombre,
+      fecha: new Date().toISOString(),
+    };
+    corregido.correcciones = [...(editingRecord.correcciones || []), correccion];
+
+    if (isSupabaseConfigured) {
+      setDbSaving(true);
+      const res = await saveCorrection(corregido, correccion);
+      setDbSaving(false);
+      if (!res.success) {
+        // No se aplica localmente si la base la rechazó: el registro oficial queda intacto.
+        setCorrectionError('No se pudo guardar la corrección: ' + res.error);
+        return;
+      }
+    }
+
+    const updatedHistory = history.map(h => (h.id === corregido.id ? corregido : h));
+    setHistory(updatedHistory);
+    localStorage.setItem('triage_history', JSON.stringify(updatedHistory));
+    setDbSuccessMessage(`Corrección registrada: Nivel ${editingRecord.triageLevel} → Nivel ${currentTriage.level}.`);
+    setTimeout(() => setDbSuccessMessage(null), 4000);
+    cancelCorrection();
+  };
+
   const finalizeTriage = async () => {
     if (currentTriage.level !== 'I' && patient.estadoOperativo !== 'preliminar_critico') {
-      if (!patient.findings || patient.findings.length !== 1) {
-        setValidationError("Debe seleccionar un problema principal / discriminador clínico antes de cerrar el triaje.");
+      if (!patient.findings || patient.findings.length === 0) {
+        setValidationError("Debe seleccionar al menos un discriminador del problema principal antes de cerrar el triaje.");
         return;
       }
     }
 
     setValidationError(null);
+    if (editingRecord) {
+      setCorrectionError(null);
+      setShowCorrectionModal(true);
+      return;
+    }
     const ageMonths = patient.age !== undefined
       ? patient.age * (patient.ageUnit === 'años' ? 12 : 1)
       : undefined;
@@ -671,7 +882,11 @@ export default function App() {
 
     const finalPatient: PatientData = {
       ...patient as PatientData,
-      id: Math.random().toString(36).substr(2, 9).toUpperCase(),
+      id: (typeof crypto !== 'undefined' && 'randomUUID' in crypto)
+        ? crypto.randomUUID()
+        : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); }),
+      creadoPor: usuarioActual?.id,
+      creadoPorNombre: usuarioActual?.nombre,
       arrivalDate: now.toISOString(),
       triageLevel: currentTriage.level,
       originalPriority: currentTriage.priority,
@@ -689,7 +904,7 @@ export default function App() {
     setHistory(updatedHistory);
     localStorage.setItem('triage_history', JSON.stringify(updatedHistory));
 
-    setPatient(INITIAL_PATIENT);
+    setPatient(createCleanPatient());
     setStep(1);
     setTepAlertDismissed(false);
     setTepAlertLevelShown(0);
@@ -794,6 +1009,21 @@ export default function App() {
     }
     doc.text(`Tiempo de Espera: ${p.waitTime}`, 20, finalY + 20);
     doc.text(`Destino Sugerido: ${p.suggestedDestination}`, 20, finalY + 30);
+
+    if (p.correcciones && p.correcciones.length > 0) {
+      const rom = ['', 'I', 'II', 'III', 'IV', 'V'];
+      (doc as any).autoTable({
+        startY: finalY + 40,
+        head: [['Corrección', 'Usuario', 'Nivel', 'Motivo']],
+        body: p.correcciones.map(c => [
+          format(new Date(c.fecha), 'dd/MM/yyyy HH:mm'),
+          c.corregidoPorNombre || '',
+          `${rom[c.nivelPrevio] || '?'} → ${rom[c.nivelNuevo] || '?'}`,
+          c.motivo,
+        ]),
+        styles: { fontSize: 8 },
+      });
+    }
 
     doc.save(`Triaje_${p.id}.pdf`);
   };
@@ -914,30 +1144,49 @@ DESTINO SUGERIDO: ${triage.destination}
 
   const renderStepIndicator = () => {
     const totalSteps = 5;
+    const stepNames = [
+      '1. Filiación',
+      '2. TEP',
+      '3. Motivo Clínico',
+      '4. Signos Vitales',
+      '5. Confirmación'
+    ];
     return (
-      <div className="flex items-center justify-center space-x-4 mb-8">
-        {[1, 2, 3, 4, 5].map((i) => {
-          if (i === 2 && patient.type === 'adult') return null; // Hide TEP step for adults
-          const isGoable = i < step;
-          return (
-            <div key={i} className="flex items-center">
-              <button
-                type="button"
-                disabled={!isGoable}
-                onClick={() => isGoable && setStep(i)}
-                className={cn(
-                  "w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2",
-                  step === i ? "bg-blue-600 text-white scale-110 shadow-lg" : 
-                  step > i ? "bg-green-500 text-white hover:bg-green-600 cursor-pointer" : "bg-slate-200 text-slate-500 cursor-not-allowed"
+      <div className="flex flex-col items-center mb-8 w-full">
+        <div className="flex items-center justify-center space-x-2 sm:space-x-4">
+          {[1, 2, 3, 4, 5].map((i) => {
+            if (i === 2 && patient.type === 'adult') return null; // Hide TEP step for adults
+            const isGoable = i <= maxStepReached || i <= step;
+            return (
+              <div key={i} className="flex items-center">
+                <button
+                  type="button"
+                  disabled={!isGoable}
+                  onClick={() => isGoable && setStep(i)}
+                  className={cn(
+                    "w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2",
+                    step === i ? "bg-blue-600 text-white scale-110 shadow-lg ring-2 ring-blue-300" : 
+                    isGoable ? "bg-green-500 text-white hover:bg-green-600 cursor-pointer shadow-sm hover:scale-105" : "bg-slate-200 text-slate-500 cursor-not-allowed"
+                  )}
+                  title={isGoable ? `Ir al ${stepNames[i - 1]} (deshacer o modificar datos)` : stepNames[i - 1]}
+                >
+                  {step > i ? <CheckCircle2 size={20} /> : i}
+                </button>
+                {i < totalSteps && (
+                  <div className={cn("w-6 sm:w-8 h-1 mx-1 sm:mx-2 rounded", step > i ? "bg-green-500" : (isGoable ? "bg-green-300" : "bg-slate-200"))} />
                 )}
-                title={isGoable ? `Volver al Paso ${i}` : `Paso ${i}`}
-              >
-                {step > i ? <CheckCircle2 size={20} /> : i}
-              </button>
-              {i < totalSteps && <div className={cn("w-8 h-1 mx-2 rounded", step > i ? "bg-green-500" : "bg-slate-200")} />}
-            </div>
-          );
-        })}
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-2 text-xs font-bold text-slate-500 flex flex-wrap items-center justify-center gap-2">
+          <span>Paso {step} de {totalSteps}: {stepNames[step - 1]}</span>
+          {maxStepReached > 1 && (
+            <span className="text-[11px] font-semibold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-200">
+              Podés hacer clic en los números para volver a cualquier paso y deshacer cambios
+            </span>
+          )}
+        </div>
       </div>
     );
   };
@@ -955,11 +1204,39 @@ DESTINO SUGERIDO: ${triage.destination}
             <p className="text-slate-500 font-medium">Hospital Gral. de Agudos "Dra. Cecilia Grierson"</p>
           </div>
         </div>
-        <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border border-slate-200/70">
-          <Clock className="text-blue-600" size={20} />
-          <span className="font-mono font-bold text-slate-700">
-            {format(currentTime, 'HH:mm:ss')}
-          </span>
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-3 bg-slate-50 px-4 py-2 rounded-full border border-slate-200/70">
+            <Clock className="text-blue-600" size={20} />
+            <span className="font-bold tabular-nums text-slate-700">
+              {format(currentTime, 'HH:mm:ss')}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setShowResetModal(true)}
+            className="flex items-center gap-1.5 px-3.5 py-2 rounded-full text-xs font-bold text-slate-700 bg-slate-50 hover:bg-rose-50 hover:text-rose-700 border border-slate-200 hover:border-rose-300 transition-all cursor-pointer shadow-xs"
+            title="Reiniciar y borrar todos los datos del paciente actual"
+          >
+            <RotateCcw size={14} className="text-rose-600" />
+            <span>Reiniciar triaje</span>
+          </button>
+          {usuarioActual && (
+            <div className="flex items-center gap-2 bg-slate-50 pl-3 pr-1.5 py-1.5 rounded-full border border-slate-200/70">
+              <UserCircle2 className="text-blue-600" size={22} />
+              <div className="leading-tight">
+                <div className="text-sm font-bold text-slate-800">{usuarioActual.nombre}</div>
+                <div className="text-[11px] font-semibold text-slate-500">{usuarioActual.rol ? ROL_ETIQUETA[usuarioActual.rol] : ''}</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => { if (window.confirm('¿Cerrar sesión?')) salir(); }}
+                className="ml-1 flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-200 hover:text-slate-900 cursor-pointer"
+                title="Cerrar sesión"
+              >
+                <LogOut size={14} /> Salir
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -968,6 +1245,26 @@ DESTINO SUGERIDO: ${triage.destination}
         <main className="w-full min-w-0 max-w-none">
           <div className="bg-white rounded-[24px] border border-slate-200/70 shadow-[0_10px_28px_rgba(15,23,42,0.10)]">
             <div className="w-full flex justify-center pt-8">
+              {editingRecord && (
+                <div className="mb-6 p-4 rounded-2xl border-2 border-violet-300 bg-violet-50 text-violet-950 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-start gap-3">
+                    <Edit3 size={22} className="text-violet-600 shrink-0 mt-0.5" />
+                    <div>
+                      <span className="block text-sm font-black uppercase tracking-wide">Corrigiendo triaje · {editingRecord.name}</span>
+                      <span className="block text-xs font-semibold mt-0.5">
+                        Clasificación original: Nivel {editingRecord.triageLevel}. Modificá lo que haga falta; al guardar se pide el motivo y queda registrado el cambio.
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={cancelCorrection}
+                    className="px-4 py-2 rounded-xl text-sm font-bold text-violet-800 border border-violet-300 bg-white hover:bg-violet-100 cursor-pointer shrink-0"
+                  >
+                    Cancelar corrección
+                  </button>
+                </div>
+              )}
               {renderStepIndicator()}
             </div>
 
@@ -986,6 +1283,29 @@ DESTINO SUGERIDO: ${triage.destination}
                         <User size={28} />
                         <h2 className="text-2xl font-black tracking-tight">Identificación del Paciente Pediátrico <span className="text-red-500">*</span></h2>
                       </div>
+                      {!!(patient.name || patient.documentId || patient.age !== undefined || patient.nombreAcompanante || patient.telefonoAcompanante || patient.parentescoAcompanante) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPatient(p => ({
+                              ...p,
+                              name: '',
+                              documentId: '',
+                              age: undefined,
+                              ageUnit: 'años',
+                              gender: 'M',
+                              nombreAcompanante: '',
+                              telefonoAcompanante: '',
+                              parentescoAcompanante: ''
+                            }));
+                            setShowAgeWarningModal(false);
+                          }}
+                          className="text-xs font-bold text-slate-600 hover:text-rose-600 bg-slate-50 hover:bg-rose-50 px-3 py-1.5 rounded-xl border border-slate-200 hover:border-rose-300 transition-all flex items-center gap-1.5 cursor-pointer self-start sm:self-auto shadow-2xs"
+                          title="Borrar datos escritos en este paso"
+                        >
+                          <RotateCcw size={13} className="text-rose-600" /> Deshacer datos escritos
+                        </button>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1147,30 +1467,59 @@ DESTINO SUGERIDO: ${triage.destination}
                             </span>
                           </div>
                           <p className="text-xs font-semibold text-slate-700 mt-1 leading-relaxed">
-                            {alteredTepCount === 3 ? '🚨 Los 3 lados están afectados (Fallo cardiopulmonar). Nivel I (Rojo). Requiere pase directo a Shock Room.' :
-                             alteredTepCount === 2 ? '⚠️ 2 lados afectados (Dificultad o Shock descompensado). Nivel II (Naranja). Requiere atención de emergencia en ≤ 15 min.' :
-                             alteredTepCount === 1 ? '1 lado afectado (Dificultad aislada). Nivel III (Amarillo). Requiere atención urgente en ≤ 30 min.' :
+                            {alteredTepCount === 3 ? '🚨 Los 3 lados están afectados. Nivel I (Rojo). Requiere pase directo a Shock Room.' :
+                             alteredTepCount === 2 ? '⚠️ 2 lados afectados. Nivel II (Naranja). Requiere atención de emergencia en ≤ 15 min.' :
+                             alteredTepCount === 1 ? '1 lado afectado. Nivel III (Amarillo). Requiere atención urgente en ≤ 30 min.' :
                              'Apariencia, respiración y circulación estables.'}
                           </p>
                         </div>
                       </div>
 
-                      {alteredTepCount >= 2 && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTepModalLevel(alteredTepCount === 3 ? 3 : 2);
-                            setShowAlertModal(true);
-                          }}
-                          className={cn(
-                            "px-3.5 py-2 text-white rounded-xl text-xs font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95",
-                            alteredTepCount === 3 ? "bg-red-600 hover:bg-red-700 shadow-red-200" : "bg-orange-500 hover:bg-orange-600 shadow-orange-200"
-                          )}
-                        >
-                          <AlertTriangle size={14} />
-                          Ver Alerta ({alteredTepCount === 3 ? 'Rojo' : 'Naranja'})
-                        </button>
-                      )}
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(alteredTepCount > 0 || 
+                          patient.tepStates?.apariencia !== 'normal' || 
+                          patient.tepStates?.respiracion !== 'normal' || 
+                          patient.tepStates?.circulacion !== 'normal' ||
+                          Object.entries(patient.tep?.appearance || {}).some(([k, v]) => k !== 'normal' && v) ||
+                          Object.entries(patient.tep?.respiration || {}).some(([k, v]) => k !== 'normal' && v) ||
+                          Object.entries(patient.tep?.circulation || {}).some(([k, v]) => k !== 'normal' && v)
+                        ) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPatient(p => ({
+                                ...p,
+                                tep: createCleanTep(),
+                                tepStates: { apariencia: 'normal', respiracion: 'normal', circulacion: 'normal' }
+                              }));
+                              setShowSpecifics({ apariencia: false, respiracion: false, circulacion: false });
+                              setTepAlertDismissed(false);
+                              setTepAlertLevelShown(0);
+                              setShowAlertModal(false);
+                            }}
+                            className="px-3 py-1.5 rounded-xl text-xs font-black text-slate-700 hover:text-rose-700 bg-white hover:bg-rose-50 border border-slate-300 hover:border-rose-300 shadow-2xs flex items-center gap-1.5 transition-all cursor-pointer"
+                            title="Deshacer todas las selecciones y restablecer el TEP a Normal"
+                          >
+                            <RotateCcw size={13} className="text-rose-600" /> Deshacer TEP
+                          </button>
+                        )}
+                        {alteredTepCount >= 2 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTepModalLevel(alteredTepCount === 3 ? 3 : 2);
+                              setShowAlertModal(true);
+                            }}
+                            className={cn(
+                              "px-3.5 py-2 text-white rounded-xl text-xs font-black shrink-0 transition-all flex items-center gap-1.5 cursor-pointer shadow-sm active:scale-95",
+                              alteredTepCount === 3 ? "bg-red-600 hover:bg-red-700 shadow-red-200" : "bg-orange-500 hover:bg-orange-600 shadow-orange-200"
+                            )}
+                          >
+                            <AlertTriangle size={14} />
+                            Ver Alerta ({alteredTepCount === 3 ? 'Rojo' : 'Naranja'})
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1223,12 +1572,42 @@ DESTINO SUGERIDO: ${triage.destination}
                             <div>
                               <div className="flex justify-between items-center mb-4 border-b border-slate-200 pb-2.5">
                                 <h3 className="font-sans font-black text-slate-950 text-lg tracking-tight">{section.title}</h3>
-                                <span className={cn(
-                                  "text-[10px] px-2.5 py-1 rounded-full font-black uppercase tracking-wider font-mono border",
-                                  isAlterado ? "bg-rose-100 text-rose-800 border-rose-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"
-                                )}>
-                                  {isAlterado ? 'Alterado' : 'Normal'}
-                                </span>
+                                <div className="flex items-center gap-1.5">
+                                  {isAlterado && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const nextTep = { ...patient.tep! };
+                                        const secKey = section.tepKey;
+                                        (nextTep as any)[secKey] = {
+                                          normal: true,
+                                          ...(section.tepKey === 'appearance' ? {
+                                            abnormalActivity: false, unresponsive: false, abnormalVisualContact: false, irritableInconsolable: false, abnormalCry: false, abnormalTone: false
+                                          } : section.tepKey === 'respiration' ? {
+                                            agitation: false, apnea: false, abnormalPosition: false, abnormalSounds: false, retractions: false
+                                          } : {
+                                            cyanosis: false, mottled: false, pallor: false, flushing: false
+                                          })
+                                        };
+                                        const nextStates = {
+                                          ...patient.tepStates!,
+                                          [section.key]: 'normal' as const
+                                        };
+                                        setPatient(p => ({ ...p, tep: nextTep, tepStates: nextStates }));
+                                      }}
+                                      className="text-[10px] font-bold text-rose-700 hover:text-rose-900 bg-white hover:bg-rose-100 px-2 py-0.5 rounded-lg border border-rose-300 shadow-2xs flex items-center gap-1 transition-all cursor-pointer"
+                                      title={`Desmarcar todas las opciones de ${section.title}`}
+                                    >
+                                      <RotateCcw size={10} /> Desmarcar
+                                    </button>
+                                  )}
+                                  <span className={cn(
+                                    "text-[11px] px-2.5 py-1 rounded-full font-bold uppercase tracking-wider border",
+                                    isAlterado ? "bg-rose-100 text-rose-800 border-rose-200" : "bg-emerald-100 text-emerald-800 border-emerald-200"
+                                  )}>
+                                    {isAlterado ? 'Alterado' : 'Normal'}
+                                  </span>
+                                </div>
                               </div>
 
                               <div className="space-y-1.5 mt-2">
@@ -1289,9 +1668,9 @@ DESTINO SUGERIDO: ${triage.destination}
                   const onToggleCriterion = (criterionId: string) => {
                     const current = patient.findings || [];
                     const isSelected = current.includes(criterionId);
-                    // Exclusive single selection: if already selected, clear it.
-                    // If a different one is selected, replace it. Max array size is 1.
-                    const next = isSelected ? [] : [criterionId];
+                    // Selección múltiple (también entre distintos problemas principales):
+                    // el discriminador más grave determina el nivel.
+                    const next = isSelected ? current.filter(f => f !== criterionId) : [...current, criterionId];
                     setPatient({ ...patient, findings: next });
                   };
 
@@ -1338,50 +1717,317 @@ DESTINO SUGERIDO: ${triage.destination}
                         return null;
                       })()}
 
-                      {/* Selector de Sistemas Clínicos para el Problema Principal - LISTA DESPLEGABLE */}
-                      <div className="space-y-2 max-w-sm">
-                        <div className="relative">
-                          <select
-                            id="clinical-system-select"
-                            value={selectedSystemId}
-                            onChange={(e) => {
-                              setSelectedSystemId(e.target.value);
-                              // Clear active discriminator on category change
-                              setPatient({ ...patient, findings: [] });
-                            }}
-                            className="w-full bg-white text-slate-850 border border-slate-200 hover:border-slate-300 rounded-xl px-4 py-3 text-base font-black shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer pr-10"
-                          >
-                            {[...CLINICAL_SYSTEMS].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })).map(sys => (
-                              <option key={sys.id} value={sys.id}>
-                                {sys.name}
-                              </option>
-                            ))}
-                          </select>
-                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
-                            <ChevronDown size={18} />
+                      {/* Barra de herramientas: Selector de Problema, Búsqueda Global y Glosario */}
+                      <div className="space-y-3">
+                        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
+                          {/* Selector de Problema Principal */}
+                          <div className="flex-1 max-w-md">
+                            <label htmlFor="clinical-system-select" className="text-xs font-black uppercase tracking-wider text-slate-600 block mb-1">
+                              Problema Principal (15 Problemas PaedCTAS):
+                            </label>
+                            <div className="relative">
+                              <select
+                                id="clinical-system-select"
+                                value={selectedSystemId}
+                                onChange={(e) => {
+                                  setSelectedSystemId(e.target.value);
+                                  setFindingSearchQuery('');
+                                }}
+                                className="w-full bg-white text-slate-850 border border-slate-200 hover:border-slate-300 rounded-xl px-4 py-3 text-base font-black shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all appearance-none cursor-pointer pr-10"
+                              >
+                                {[...CLINICAL_SYSTEMS].sort((a, b) => a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })).map(sys => {
+                                  const selectedCount = (patient.findings || []).filter(f => findFindingMeta(f)?.sistema === sys.id).length;
+                                  return (
+                                    <option key={sys.id} value={sys.id}>
+                                      {sys.name} {selectedCount > 0 ? `(✓ ${selectedCount} selecc.)` : ''}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
+                                <ChevronDown size={18} />
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Buscador Rápido de Discriminadores en todos los problemas */}
+                          <div className="flex-1">
+                            <label htmlFor="finding-search-input" className="text-xs font-black uppercase tracking-wider text-slate-600 block mb-1">
+                              Búsqueda rápida en todo el catálogo:
+                            </label>
+                            <div className="relative">
+                              <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                              <input
+                                id="finding-search-input"
+                                type="text"
+                                value={findingSearchQuery}
+                                onChange={(e) => setFindingSearchQuery(e.target.value)}
+                                placeholder="Buscar signo/síntoma (ej: fiebre, convulsión, TEC, DR, quemadura...)"
+                                className="w-full bg-white text-slate-800 border border-slate-200 hover:border-slate-300 rounded-xl pl-10 pr-10 py-3 text-sm font-semibold shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                              />
+                              {findingSearchQuery && (
+                                <button
+                                  type="button"
+                                  onClick={() => setFindingSearchQuery('')}
+                                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                                  title="Limpiar búsqueda"
+                                >
+                                  <X size={16} />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Botón Glosario de Abreviaturas */}
+                          <div className="lg:self-end">
+                            <button
+                              type="button"
+                              onClick={() => setShowAbbreviations(s => !s)}
+                              className={cn(
+                                "h-[46px] px-3.5 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-2xs whitespace-nowrap",
+                                showAbbreviations 
+                                  ? "bg-blue-50 border-blue-300 text-blue-700" 
+                                  : "bg-white border-slate-200 hover:border-slate-300 text-slate-700 hover:bg-slate-50"
+                              )}
+                            >
+                              <BookOpen size={16} className={showAbbreviations ? "text-blue-600" : "text-slate-500"} />
+                              <span>{showAbbreviations ? 'Ocultar Glosario' : 'Glosario PaedCTAS'}</span>
+                            </button>
                           </div>
                         </div>
+
+                        {/* Glosario Desplegable de Abreviaturas Institucionales */}
+                        {showAbbreviations && (
+                          <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="p-4 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-md space-y-2.5 text-xs"
+                          >
+                            <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                              <span className="font-black uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+                                <BookOpen size={14} className="text-blue-400" />
+                                Glosario de Abreviaturas Oficiales · PaedCTAS Hospital Grierson
+                              </span>
+                              <span className="text-[11px] text-slate-400">Versión 12/11/2026</span>
+                            </div>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2 pt-1">
+                              {Object.entries(PAED_CTAS_ABBREVIATIONS).map(([abbr, significado]) => (
+                                <div key={abbr} className="bg-slate-800/80 p-2 rounded-lg border border-slate-700/60">
+                                  <span className="font-black text-amber-400 block">{abbr}</span>
+                                  <span className="text-[11px] text-slate-300 leading-tight block">{significado}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </motion.div>
+                        )}
                       </div>
 
                       {/* Matriz Completa y Ajustada a la Pantalla */}
                       <div className="space-y-3">
-                        <span className="text-xs font-black uppercase tracking-widest text-slate-500 block">
-                          Matriz de Discriminación de Motivos de Consulta:
-                        </span>
-                        
-                        <CTASMatrix
-                          criteria={criteria}
-                          selectedCriterionIds={patient.findings || []}
-                          onToggleCriterion={onToggleCriterion}
-                        />
+                        <div className="flex items-center justify-between">
+                          <span className="text-xs font-black uppercase tracking-widest text-slate-500 block">
+                            {findingSearchQuery.trim() 
+                              ? `Resultados de búsqueda para "${findingSearchQuery.trim()}":` 
+                              : `Matriz de Discriminación: ${currentSystem.name}`}
+                          </span>
+                          {!findingSearchQuery.trim() && (
+                            <span className="text-xs font-semibold text-slate-500 italic">
+                              {currentSystem.description}
+                            </span>
+                          )}
+                        </div>
+
+                        {((patient.findings || []).length > 0 || !!patient.otherSymptoms || !!findingSearchQuery) && (
+                          <div className="flex flex-wrap items-center gap-2 p-3 rounded-xl bg-slate-50 border border-slate-200">
+                            <span className="text-xs font-black text-slate-600 uppercase tracking-wide">
+                              Seleccionados ({(patient.findings || []).length}) · define el nivel el más grave:
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPatient(p => ({ ...p, findings: [], otherSymptoms: '' }));
+                                setFindingSearchQuery('');
+                                setShowFindingsAlert(false);
+                                setFindingsAlertDismissed(false);
+                              }}
+                              className="ml-auto text-xs font-black text-rose-700 bg-white hover:bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-300 shadow-2xs flex items-center gap-1 transition-all cursor-pointer"
+                              title="Deshacer y quitar todos los hallazgos seleccionados"
+                            >
+                              <RotateCcw size={12} className="text-rose-600" /> Deshacer selecciones
+                            </button>
+                            <div className="flex flex-wrap items-center gap-2 w-full pt-1">
+                              {[...(patient.findings || [])]
+                                .map(f => ({ f, meta: findFindingMeta(f) }))
+                                .sort((a, b) => (a.meta?.nivel ?? 9) - (b.meta?.nivel ?? 9))
+                                .map(({ f, meta }) => {
+                                  const romano = ['', 'I', 'II', 'III', 'IV', 'V'][meta?.nivel ?? 0] || '?';
+                                  const color = meta?.nivel === 1 ? 'bg-red-100 text-red-900 border-red-300'
+                                    : meta?.nivel === 2 ? 'bg-orange-100 text-orange-900 border-orange-300'
+                                    : meta?.nivel === 3 ? 'bg-yellow-100 text-yellow-900 border-yellow-300'
+                                    : meta?.nivel === 4 ? 'bg-green-100 text-green-900 border-green-300'
+                                    : 'bg-blue-100 text-blue-900 border-blue-300';
+                                  const sistema = CLINICAL_SYSTEMS.find(sy => sy.id === meta?.sistema)?.name;
+                                  return (
+                                    <button
+                                      key={f}
+                                      type="button"
+                                      onClick={() => onToggleCriterion(f)}
+                                      title={`${sistema ?? ''} · Quitar`}
+                                      className={cn('flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full border cursor-pointer hover:opacity-80 shadow-2xs', color)}
+                                    >
+                                      <span className="font-black">{romano}</span> {f} <X size={12} className="opacity-70 hover:opacity-100" />
+                                    </button>
+                                  );
+                                })}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Vista de Resultados de Búsqueda Global */}
+                        {findingSearchQuery.trim() ? (
+                          <div className="space-y-3 p-4 bg-slate-50/80 rounded-2xl border border-slate-200">
+                            {(() => {
+                              const q = findingSearchQuery.trim().toLowerCase();
+                              const searchResults: { finding: string; sys: ClinicalSystem; level: CTASLevel }[] = [];
+                              CLINICAL_SYSTEMS.forEach(sys => {
+                                sys.matrix.I.forEach(label => {
+                                  if (label.toLowerCase().includes(q)) searchResults.push({ finding: label, sys, level: 1 });
+                                });
+                                sys.matrix.II.forEach(label => {
+                                  if (label.toLowerCase().includes(q)) searchResults.push({ finding: label, sys, level: 2 });
+                                });
+                                sys.matrix.III.forEach(label => {
+                                  if (label.toLowerCase().includes(q)) searchResults.push({ finding: label, sys, level: 3 });
+                                });
+                                sys.matrix.IV.forEach(label => {
+                                  if (label.toLowerCase().includes(q)) searchResults.push({ finding: label, sys, level: 4 });
+                                });
+                                sys.matrix.V.forEach(label => {
+                                  if (label.toLowerCase().includes(q)) searchResults.push({ finding: label, sys, level: 5 });
+                                });
+                              });
+
+                              if (searchResults.length === 0) {
+                                return (
+                                  <div className="py-8 text-center text-slate-500">
+                                    <p className="font-bold">No se encontraron discriminadores para "{findingSearchQuery.trim()}".</p>
+                                    <p className="text-xs text-slate-400 mt-1">Pruebe con otros términos o revise las 15 categorías en el selector.</p>
+                                    <button
+                                      type="button"
+                                      onClick={() => setFindingSearchQuery('')}
+                                      className="mt-3 text-xs font-bold text-blue-600 hover:underline cursor-pointer"
+                                    >
+                                      Volver a la matriz
+                                    </button>
+                                  </div>
+                                );
+                              }
+
+                              return (
+                                <div className="space-y-2">
+                                  <div className="flex items-center justify-between text-xs font-bold text-slate-600 px-1">
+                                    <span>{searchResults.length} discriminador(es) coincidente(s):</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => setFindingSearchQuery('')}
+                                      className="text-blue-600 hover:underline cursor-pointer"
+                                    >
+                                      Cerrar búsqueda
+                                    </button>
+                                  </div>
+                                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                                    {searchResults.map(({ finding, sys, level }) => {
+                                      const isSelected = (patient.findings || []).includes(finding);
+                                      const levelTag = level === 1 ? 'Nivel I · Resucitación'
+                                        : level === 2 ? 'Nivel II · Emergencia'
+                                        : level === 3 ? 'Nivel III · Urgente'
+                                        : level === 4 ? 'Nivel IV · Poco urgente'
+                                        : 'Nivel V · No urgente';
+                                      const tagColor = level === 1 ? 'bg-red-100 text-red-900 border-red-300'
+                                        : level === 2 ? 'bg-orange-100 text-orange-900 border-orange-300'
+                                        : level === 3 ? 'bg-yellow-100 text-yellow-900 border-yellow-300'
+                                        : level === 4 ? 'bg-green-100 text-green-900 border-green-300'
+                                        : 'bg-blue-100 text-blue-900 border-blue-300';
+
+                                      return (
+                                        <div
+                                          key={finding}
+                                          onClick={() => onToggleCriterion(finding)}
+                                          className={cn(
+                                            "p-3 rounded-xl border text-left shadow-2xs cursor-pointer select-none transition-all flex flex-col justify-between gap-2",
+                                            isSelected 
+                                              ? "bg-blue-50/80 border-blue-500 ring-2 ring-blue-400"
+                                              : "bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/50"
+                                          )}
+                                        >
+                                          <div className="flex items-start justify-between gap-2">
+                                            <div className="flex items-center gap-1.5 flex-wrap">
+                                              <span className={cn("text-[10px] font-black uppercase px-2 py-0.5 rounded-full border", tagColor)}>
+                                                {levelTag}
+                                              </span>
+                                              <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                                                {sys.name}
+                                              </span>
+                                            </div>
+                                            <input
+                                              type="checkbox"
+                                              checked={isSelected}
+                                              readOnly
+                                              className="mt-0.5 h-4 w-4 border-slate-300 rounded accent-blue-600"
+                                            />
+                                          </div>
+                                          <p className="text-sm font-semibold text-slate-800 leading-snug">
+                                            {finding}
+                                          </p>
+                                          <div className="pt-1 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                setSelectedSystemId(sys.id);
+                                                setFindingSearchQuery('');
+                                              }}
+                                              className="text-blue-600 hover:underline font-bold"
+                                            >
+                                              Abrir problema {sys.name} →
+                                            </button>
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        ) : (
+                          <CTASMatrix
+                            criteria={criteria}
+                            selectedCriterionIds={patient.findings || []}
+                            onToggleCriterion={onToggleCriterion}
+                          />
+                        )}
                       </div>
 
                       {/* Observaciones adicionales */}
                       <div className="space-y-2 pt-4 border-t border-slate-100">
-                        <label className="text-base font-black text-slate-800 flex items-center gap-2">
-                          <Plus size={18} className="text-blue-600" />
-                          Otros Síntomas / Observaciones Opcionales
-                        </label>
+                        <div className="flex items-center justify-between">
+                          <label className="text-base font-black text-slate-800 flex items-center gap-2">
+                            <Plus size={18} className="text-blue-600" />
+                            Otros Síntomas / Observaciones Opcionales
+                          </label>
+                          {!!patient.otherSymptoms && (
+                            <button
+                              type="button"
+                              onClick={() => setPatient(p => ({ ...p, otherSymptoms: '' }))}
+                              className="text-xs font-bold text-slate-500 hover:text-rose-600 flex items-center gap-1 transition-all cursor-pointer"
+                              title="Borrar texto de observaciones"
+                            >
+                              <RotateCcw size={12} /> Borrar texto
+                            </button>
+                          )}
+                        </div>
                         <textarea 
                           className="w-full p-4 rounded-2xl border border-slate-200 focus:ring-2 focus:ring-blue-500 outline-none transition-all min-h-[90px] text-base font-semibold text-slate-800 placeholder:text-slate-400 shadow-sm"
                           placeholder="Escriba aquí otros síntomas o detalles opcionales..."
@@ -1406,10 +2052,64 @@ DESTINO SUGERIDO: ${triage.destination}
                         <Heart size={28} />
                         <h2 className="text-2xl font-black tracking-tight">Signos Vitales / Constantes</h2>
                       </div>
-                      <span className="text-xs font-black bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
-                        Campos con <span className="text-red-500 font-bold">*</span> son obligatorios
-                      </span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {(Object.entries(patient.vitals || {}).some(([k, v]) => 
+                            k !== 'avpu' && k !== 'condicionMedicionSpo2' && k !== 'metodoTemperatura' && v !== undefined && v !== null && v !== ''
+                          ) || 
+                          (patient.vitals?.avpu && patient.vitals.avpu !== 'A') ||
+                          (patient.vitals?.condicionMedicionSpo2 && patient.vitals.condicionMedicionSpo2 !== 'aire_ambiente') ||
+                          (patient.vitals?.metodoTemperatura && patient.vitals.metodoTemperatura !== 'axilar')
+                        ) && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setPatient(p => ({ ...p, vitals: createCleanVitals() }));
+                              setShowAbnormalVitalModal(false);
+                            }}
+                            className="text-xs font-black text-slate-700 hover:text-rose-700 bg-white hover:bg-rose-50 px-3 py-1.5 rounded-xl border border-slate-300 hover:border-rose-300 shadow-2xs flex items-center gap-1.5 transition-all cursor-pointer"
+                            title="Restablecer todos los signos vitales y neurológico a valores normales/vacíos"
+                          >
+                            <RotateCcw size={13} className="text-rose-600" /> Deshacer / Limpiar signos
+                          </button>
+                        )}
+                        {currentTriage.level === 'IV' || currentTriage.level === 'V' ? (
+                          <span className="text-xs font-bold bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-lg border border-emerald-200 shrink-0 self-start sm:self-auto flex items-center gap-1.5 shadow-2xs">
+                            <CheckCircle2 size={14} className="text-emerald-600" />
+                            Nivel {currentTriage.level} · Signos vitales optativos
+                          </span>
+                        ) : (
+                          <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
+                            Campos con <span className="text-red-500 font-bold">*</span> son obligatorios
+                          </span>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Banner Informativo para Niveles IV y V con signos optativos */}
+                    {(currentTriage.level === 'IV' || currentTriage.level === 'V') && (
+                      <div className="p-4 rounded-2xl bg-emerald-50/90 border border-emerald-200 text-emerald-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-xs">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-emerald-200 text-emerald-800 rounded-xl shrink-0">
+                            <CheckCircle2 size={18} />
+                          </div>
+                          <div>
+                            <span className="font-bold text-sm block">
+                              Prioridad {currentTriage.priority}: Los signos vitales son completamente optativos.
+                            </span>
+                            <p className="text-xs text-emerald-800 mt-0.5 font-medium leading-relaxed">
+                              Puede continuar directamente a la confirmación sin cargar valores o ingresar únicamente las constantes que considere pertinentes.
+                            </p>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => setStep(5)}
+                          className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shrink-0 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
+                        >
+                          Continuar sin signos <ChevronRight size={16} />
+                        </button>
+                      </div>
+                    )}
 
                     {/* Banner Informativo de Ayuda Clínica para Signos Anormales (Temp, SpO2, Glucemia) */}
                     {abnormalVitalsList.length > 0 && (
@@ -1429,7 +2129,7 @@ DESTINO SUGERIDO: ${triage.destination}
                             </div>
                             <p className="text-xs font-semibold text-amber-900 mt-1 leading-relaxed">
                               {abnormalVitalsList.map(a => `${a.title}: ${a.valStr}`).join(' · ')}. 
-                              Estos valores no asignan gravedad automáticamente: asisten al criterio de enfermería para definir el motivo clínico.
+                              Estos valores no asignan gravedad automáticamente (excepto SpO2 &lt; 92%, que fuerza al menos Nivel II): asisten al criterio de enfermería para definir el motivo clínico.
                             </p>
                           </div>
                         </div>
@@ -1457,7 +2157,9 @@ DESTINO SUGERIDO: ${triage.destination}
                           if (val === undefined || val === null || isNaN(val)) return null;
                           
                           if (key === 'heartRate' || key === 'respiratoryRate') {
-                            return getVitalsDSLabel(val, ageMonths, key === 'heartRate' ? 'FC' : 'FR');
+                            // Los desvíos estándar (DS) de FC y FR se calculan internamente
+                            // para asignar el nivel, pero no se muestran en pantalla.
+                            return null;
                           }
                           
                           if (key === 'systolicBP') {
@@ -1570,20 +2272,41 @@ DESTINO SUGERIDO: ${triage.destination}
                                     </span>
                                   )}
                                 </label>
-                                <input 
-                                  type="number" 
-                                  step={v.key === 'temperature' ? 0.1 : 1}
-                                  className={cn("w-full p-3 rounded-xl border outline-none text-base font-black text-slate-800 shadow-sm placeholder:text-slate-400 bg-white transition-all duration-300", inputBorderClass)}
-                                  placeholder={isRequired ? "---" : "--- (opcional)"}
-                                  value={patient.vitals![v.key as keyof VitalSigns] ?? ''}
-                                  onChange={e => {
-                                    const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                                    setPatient({
-                                      ...patient, 
-                                      vitals: { ...patient.vitals!, [v.key]: val }
-                                    });
-                                  }}
-                                />
+                                <div className="relative flex items-center">
+                                  <input 
+                                    type="number" 
+                                    step={v.key === 'temperature' ? 0.1 : 1}
+                                    className={cn(
+                                      "w-full p-3 rounded-xl border outline-none text-base font-black text-slate-800 shadow-sm placeholder:text-slate-400 bg-white transition-all duration-300", 
+                                      inputBorderClass,
+                                      val !== undefined && "pr-9"
+                                    )}
+                                    placeholder={isRequired ? "---" : "--- (opcional)"}
+                                    value={patient.vitals![v.key as keyof VitalSigns] ?? ''}
+                                    onChange={e => {
+                                      const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                      setPatient({
+                                        ...patient, 
+                                        vitals: { ...patient.vitals!, [v.key]: val }
+                                      });
+                                    }}
+                                  />
+                                  {val !== undefined && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setPatient({
+                                          ...patient,
+                                          vitals: { ...patient.vitals!, [v.key]: undefined }
+                                        });
+                                      }}
+                                      className="absolute right-2.5 p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-slate-100 transition-all cursor-pointer"
+                                      title={`Borrar valor de ${v.label}`}
+                                    >
+                                      <X size={15} />
+                                    </button>
+                                  )}
+                                </div>
                               </div>
                             </div>
                           );
@@ -1598,7 +2321,7 @@ DESTINO SUGERIDO: ${triage.destination}
                           <ShieldAlert size={20} className="text-purple-600" />
                           <h3 className="font-extrabold text-slate-900 text-base md:text-lg">Clasificación neurológica AVPU</h3>
                         </div>
-                        <span className="text-[10px] font-black text-purple-700 bg-purple-50 px-3 py-1 rounded-full border border-purple-100 uppercase font-mono">
+                        <span className="text-xs font-bold text-purple-700 bg-purple-50 px-3 py-1 rounded-full border border-purple-200 uppercase tracking-wide">
                           {patient.vitals?.avpu === 'A' ? 'Alerta' :
                            patient.vitals?.avpu === 'V' ? 'Verbal' :
                            patient.vitals?.avpu === 'P' ? 'Dolor' :
@@ -1735,6 +2458,47 @@ DESTINO SUGERIDO: ${triage.destination}
                         {getSummaryText(patient as PatientData)}
                       </pre>
                     </div>
+                    {/* Panel de Modificación Directa para Deshacer / Corregir */}
+                    <div className="p-5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-4 text-left shadow-2xs">
+                      <div>
+                        <span className="text-xs font-black uppercase text-slate-700 tracking-wider block">
+                          ¿Querés revisar, modificar o deshacer algo antes de guardar?
+                        </span>
+                        <span className="text-xs text-slate-500 font-medium mt-0.5 block">
+                          Podés volver directamente a cualquier sección haciendo clic en su botón:
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setStep(1)}
+                          className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <User size={13} className="text-blue-600" /> 1. Filiación
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setStep(2)}
+                          className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Stethoscope size={13} className="text-blue-600" /> 2. TEP
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setStep(3)}
+                          className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Activity size={13} className="text-blue-600" /> 3. Motivo
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setStep(4)}
+                          className="px-3 py-2 rounded-xl bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 text-xs font-bold transition-all shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Heart size={13} className="text-blue-600" /> 4. Signos
+                        </button>
+                      </div>
+                    </div>
                   </motion.div>
                 )}
               </AnimatePresence>
@@ -1747,39 +2511,78 @@ DESTINO SUGERIDO: ${triage.destination}
               )}
 
               {/* Navigation Buttons */}
-              <div className="flex justify-between mt-12 pt-8 border-t border-slate-150">
-                {step > 1 && step < 5 && (
+              <div className="flex flex-wrap items-center justify-between gap-4 mt-12 pt-8 border-t border-slate-150">
+                {step > 1 && (
                   <button 
                     onClick={handleBack}
-                    className="flex items-center gap-2 px-7 py-3.5 rounded-xl font-black text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-all text-base border-2 border-transparent active:border-slate-250 cursor-pointer"
+                    className="flex items-center gap-2 px-6 py-3.5 rounded-xl font-black text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-all text-base border border-slate-200 active:border-slate-300 cursor-pointer shadow-2xs"
                   >
                     <ChevronLeft size={22} /> Atrás
                   </button>
                 )}
                 <div className="flex-1" />
                 {currentTriage.level === 'I' && step < 5 ? (
-                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleUndoCurrentStep}
+                      className="flex items-center gap-1.5 px-4 py-3.5 rounded-xl font-bold text-slate-700 bg-white hover:bg-slate-100 text-sm transition-all cursor-pointer border border-slate-200 shadow-2xs"
+                      title="Deshacer selecciones o campos de este paso"
+                    >
+                      <RotateCcw size={16} className="text-rose-600" />
+                      Deshacer este paso
+                    </button>
+                    {isStepValid() && (
+                      <button
+                        type="button"
+                        onClick={handleNext}
+                        className="flex items-center gap-1.5 px-5 py-3.5 rounded-xl font-bold text-slate-700 hover:bg-slate-100 text-sm transition-all cursor-pointer border border-slate-300"
+                        title="Continuar documentando signos o problemas"
+                      >
+                        Continuar evaluación <ChevronRight size={18} />
+                      </button>
+                    )}
                     <button 
                       onClick={handleImmediateShockRoom}
-                      className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-8 py-3.5 rounded-xl font-black text-base shadow-xl shadow-red-200 animate-pulse transition-all cursor-pointer select-none active:scale-95"
+                      className="flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 text-white px-7 py-3.5 rounded-xl font-black text-base shadow-xl shadow-red-200 animate-pulse transition-all cursor-pointer select-none active:scale-95"
                     >
                       <Zap size={20} />
                       🚨 Ingresar a Shock Room (Nivel I)
                     </button>
                   </div>
                 ) : step < 5 ? (
-                  <button 
-                    onClick={handleNext}
-                    disabled={!isStepValid()}
-                    className="flex items-center gap-2 bg-blue-600 text-white px-10 py-3.5 rounded-xl font-black text-base shadow-xl shadow-blue-200/70 hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed select-none cursor-pointer"
-                  >
-                    Siguiente <ChevronRight size={22} />
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleUndoCurrentStep}
+                      className="flex items-center gap-1.5 px-4 py-3.5 rounded-xl font-bold text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 text-sm transition-all cursor-pointer border border-slate-200 shadow-2xs"
+                      title="Deshacer selecciones o valores ingresados en este paso"
+                    >
+                      <RotateCcw size={15} />
+                      Deshacer paso
+                    </button>
+                    <button 
+                      onClick={handleNext}
+                      disabled={!isStepValid()}
+                      className="flex items-center gap-2 bg-blue-600 text-white px-10 py-3.5 rounded-xl font-black text-base shadow-xl shadow-blue-200/70 hover:bg-blue-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed select-none cursor-pointer"
+                    >
+                      Siguiente <ChevronRight size={22} />
+                    </button>
+                  </div>
                 ) : (
-                  <div className="flex gap-4">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={handleUndoCurrentStep}
+                      className="flex items-center gap-1.5 px-4 py-3.5 rounded-xl font-bold text-slate-600 hover:text-slate-900 bg-slate-50 hover:bg-slate-100 text-sm transition-all cursor-pointer border border-slate-200 shadow-2xs"
+                      title="Volver al paso de signos vitales para modificar o deshacer datos"
+                    >
+                      <RotateCcw size={15} />
+                      Deshacer / Volver a Signos
+                    </button>
                     <button 
                       onClick={() => setStep(1)}
-                      className="px-7 py-3.5 rounded-xl font-black text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-all text-base cursor-pointer"
+                      className="px-6 py-3.5 rounded-xl font-black text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition-all text-base cursor-pointer border border-slate-200"
                     >
                       Editar Formularios
                     </button>
@@ -1787,7 +2590,7 @@ DESTINO SUGERIDO: ${triage.destination}
                       onClick={finalizeTriage}
                       className="flex items-center gap-2 bg-green-600 text-white px-10 py-3.5 rounded-xl font-black text-base shadow-xl shadow-green-200 hover:bg-green-700 transition-all cursor-pointer"
                     >
-                      Finalizar Registro <CheckCircle2 size={22} />
+                      {editingRecord ? 'Guardar corrección' : 'Finalizar Registro'} <CheckCircle2 size={22} />
                     </button>
                   </div>
                 )}
@@ -1825,21 +2628,23 @@ DESTINO SUGERIDO: ${triage.destination}
           <div className="bg-white p-6 sm:p-7 rounded-[24px] border border-slate-200/85 shadow-[0_12px_32px_rgba(15,23,42,0.08)] space-y-5">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="space-y-0.5">
-                <h3 className="font-sans font-black text-slate-900 text-sm md:text-base flex items-center gap-1.5">
+                <h3 className="font-bold text-slate-900 text-sm md:text-base flex items-center gap-2">
                   <Activity size={18} className="text-blue-600 animate-pulse" />
                   Paciente en Evaluación
                 </h3>
-                <p className="text-[10px] font-bold text-slate-400 font-mono uppercase">Monitoreo Clínico de Sesión</p>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  Monitoreo Clínico de Sesión
+                </p>
               </div>
               <div className="flex items-center gap-1.5 shrink-0">
                 <span className={cn(
-                  "w-2 h-2 rounded-full shadow-[0_0_8px_currentColor] transition-all duration-500",
+                  "w-2 h-2 rounded-full transition-all duration-500",
                   isOnline && supabaseConnected 
-                    ? "bg-emerald-500 text-emerald-500 animate-pulse" 
-                    : "bg-rose-500 text-rose-500"
+                    ? "bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.5)] animate-pulse" 
+                    : "bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.5)]"
                 )} />
                 <span className={cn(
-                  "text-[9px] font-black uppercase tracking-wider font-sans",
+                  "text-[10px] font-bold uppercase tracking-wider",
                   isOnline && supabaseConnected ? "text-emerald-600" : "text-rose-500"
                 )}>
                   {isOnline && supabaseConnected ? 'En Línea' : 'Local'}
@@ -1927,20 +2732,20 @@ DESTINO SUGERIDO: ${triage.destination}
                       active.border,
                       urgencyAnimation
                     )}>
-                      <div className="space-y-1">
-                        <span className="text-[9px] font-black tracking-widest uppercase text-slate-500 block">NIVEL</span>
-                        <div className="flex items-center gap-2">
-                          <span className="w-10 h-10 rounded-xl bg-white border border-black/10 flex items-center justify-center font-black text-xl font-mono shadow-sm">
+                      <div className="space-y-1.5">
+                        <span className="text-[10px] font-bold tracking-wider uppercase text-slate-500 block">NIVEL</span>
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-11 h-11 rounded-xl bg-white border border-slate-200 flex items-center justify-center font-bold text-2xl text-slate-900 shadow-xs tracking-tight">
                             {currentLevel}
                           </span>
-                          <span className="font-extrabold text-xs leading-tight text-slate-900 line-clamp-2">
+                          <span className="font-bold text-sm leading-tight text-slate-900 line-clamp-2">
                             {active.name.split(' · ')[1]}
                           </span>
                         </div>
                       </div>
                       <div className="pt-2 border-t border-black/5 mt-2">
-                        <p className="text-[10px] font-black text-slate-500 uppercase">TIEMPO OBJETIVO</p>
-                        <p className="text-xs font-black text-slate-800 leading-none mt-1">{active.wait}</p>
+                        <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">TIEMPO OBJETIVO</p>
+                        <p className="text-xs font-bold text-slate-800 leading-none mt-1">{active.wait}</p>
                       </div>
                     </div>
 
@@ -1951,27 +2756,27 @@ DESTINO SUGERIDO: ${triage.destination}
                         ? "bg-rose-50 border-rose-300 shadow-md shadow-rose-100" 
                         : "bg-slate-50 border-slate-200"
                     )}>
-                      <div className="space-y-1">
+                      <div className="space-y-1.5">
                         <div className="flex items-center justify-between">
-                          <span className="text-[9px] font-black tracking-widest uppercase text-slate-500">TRANSCURRIDO</span>
-                          <Clock size={12} className={cn(isTimeExceeded ? "text-rose-600 animate-spin" : "text-slate-400")} />
+                          <span className="text-[10px] font-bold tracking-wider uppercase text-slate-500">TRANSCURRIDO</span>
+                          <Clock size={13} className={cn(isTimeExceeded ? "text-rose-600 animate-spin" : "text-slate-400")} />
                         </div>
-                        <div className="text-2xl sm:text-3xl font-black font-mono tracking-tight text-slate-900">
+                        <div className="text-3xl font-bold tabular-nums tracking-tight text-slate-900">
                           {elapsedStr}
                         </div>
                       </div>
 
                       <div className="pt-2 border-t border-slate-200 mt-2">
                         {isTimeExceeded ? (
-                          <div className="flex items-center gap-1 text-[9px] font-black uppercase text-red-700 animate-pulse bg-red-100 p-1.5 rounded-lg border border-red-200">
+                          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase text-red-700 animate-pulse bg-red-100 p-1.5 rounded-lg border border-red-200">
                             <ShieldAlert size={12} className="shrink-0" />
                             <span>¡ALERTA: TIEMPO EXCEDIDO!</span>
                           </div>
                         ) : (
                           <div className="space-y-1">
-                            <div className="flex justify-between text-[9px] font-black text-slate-500">
+                            <div className="flex justify-between text-[10px] font-bold text-slate-500 uppercase tracking-wider">
                               <span>PROGRESO</span>
-                              <span>{elapsedMin} / {active.targetMin || '∞'} MIN</span>
+                              <span className="tabular-nums font-semibold">{elapsedMin} / {active.targetMin || '∞'} MIN</span>
                             </div>
                             <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
                               <div 
@@ -1986,26 +2791,33 @@ DESTINO SUGERIDO: ${triage.destination}
                   </div>
 
                   {/* Level dots representing the scale of gravity CTAS */}
-                  <div className="space-y-3 pt-1">
-                    <div className="text-[10px] font-black uppercase tracking-wider text-slate-500">Progreso / Escala de Gravedad CTAS:</div>
+                  <div className="space-y-2.5 pt-1">
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Progreso / Escala de Gravedad CTAS:</div>
                     <div className="relative">
                       {/* Bar back */}
-                      <div className="absolute top-[14px] left-3 right-3 h-0.5 bg-slate-100 -z-10" />
+                      <div className="absolute top-[16px] left-3 right-3 h-0.5 bg-slate-200/80 -z-10" />
                       <div className="grid grid-cols-5 gap-1.5 z-10 relative">
                         {(['I', 'II', 'III', 'IV', 'V'] as const).map((lvl) => {
                           const isActive = lvl === currentLevel;
-                          const dotColor = lvl === 'I' ? 'bg-red-500 text-white animate-pulse' : lvl === 'II' ? 'bg-orange-500 text-white animate-pulse' : lvl === 'III' ? 'bg-yellow-500 text-slate-900' : lvl === 'IV' ? 'bg-green-500 text-white' : 'bg-blue-500 text-white';
+                          const dotColor = lvl === 'I' ? 'bg-red-500 text-white animate-pulse ring-4 ring-red-100' 
+                            : lvl === 'II' ? 'bg-orange-500 text-white animate-pulse ring-4 ring-orange-100' 
+                            : lvl === 'III' ? 'bg-amber-400 text-slate-900 ring-4 ring-amber-100' 
+                            : lvl === 'IV' ? 'bg-emerald-500 text-white ring-4 ring-emerald-100' 
+                            : 'bg-blue-500 text-white ring-4 ring-blue-100';
                           return (
                             <div key={lvl} className="flex flex-col items-center">
                               <div className={cn(
-                                "w-7 h-7 rounded-full flex items-center justify-center font-black text-xs font-mono transition-all",
+                                "w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs tracking-tight transition-all shadow-xs",
                                 isActive 
-                                  ? `${dotColor} scale-110 shadow-lg ring-4 ring-slate-150`
-                                  : "bg-slate-100 text-slate-400 hover:text-slate-600 cursor-pointer"
+                                  ? `${dotColor} scale-110 shadow-md`
+                                  : "bg-slate-100 text-slate-500 hover:text-slate-700 hover:bg-slate-200/80 cursor-pointer"
                               )}>
                                 {lvl}
                               </div>
-                              <span className={cn("text-[9px] sm:text-[10px] mt-1.5 font-black leading-tight", isActive ? "text-slate-800" : "text-slate-400")}>
+                              <span className={cn(
+                                "text-[10px] mt-1.5 font-semibold tracking-normal leading-tight", 
+                                isActive ? "text-slate-900 font-bold" : "text-slate-400"
+                              )}>
                                 {lvl === 'I' ? 'Resuc.' : lvl === 'II' ? 'Emerg.' : lvl === 'III' ? 'Urgent.' : lvl === 'IV' ? 'P.Urg.' : 'No Urg.'}
                               </span>
                             </div>
@@ -2025,12 +2837,21 @@ DESTINO SUGERIDO: ${triage.destination}
 
             <button 
               onClick={() => {
-                setPatient(INITIAL_PATIENT);
+                setEditingRecord(null);
+                setShowCorrectionModal(false);
+                setPatient(createCleanPatient());
                 setStep(1);
+                setMaxStepReached(1);
                 setTepAlertDismissed(false);
+                setTepAlertLevelShown(0);
                 setShowAlertModal(false);
+                setShowAbnormalVitalModal(false);
                 setShowFindingsAlert(false);
                 setFindingsAlertDismissed(false);
+                setShowAgeWarningModal(false);
+                setShowSpecifics({ apariencia: false, respiracion: false, circulacion: false });
+                setFindingSearchQuery('');
+                setValidationError(null);
               }}
               className="w-full mt-4 py-3 bg-slate-700 hover:bg-slate-800 text-white rounded-xl text-base font-black transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm active:scale-95"
             >
@@ -2113,6 +2934,16 @@ DESTINO SUGERIDO: ${triage.destination}
                             )}>
                               NIVEL {p.triageLevel}
                             </span>
+                            {(p.correcciones?.length ?? 0) > 0 && (
+                              <span
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-800 border border-violet-200 uppercase tracking-wide"
+                                title={(p.correcciones || []).map(c =>
+                                  `${format(new Date(c.fecha), 'dd/MM HH:mm')} · ${c.corregidoPorNombre || 'Usuario'} · Nivel ${['','I','II','III','IV','V'][c.nivelPrevio]} → ${['','I','II','III','IV','V'][c.nivelNuevo]} · ${c.motivo}`
+                                ).join('\n')}
+                              >
+                                Corregido ({p.correcciones!.length})
+                              </span>
+                            )}
                           </div>
 
                           {/* Nombre */}
@@ -2123,7 +2954,7 @@ DESTINO SUGERIDO: ${triage.destination}
 
                         {/* Identificador / ID */}
                         <div className="shrink-0 text-right">
-                          <span className="text-xs font-medium text-slate-400 font-mono">{p.id}</span>
+                          <span className="text-xs font-medium text-slate-400 font-mono" title={p.id}>{p.id.slice(0, 8).toUpperCase()}</span>
                         </div>
                       </div>
 
@@ -2140,6 +2971,15 @@ DESTINO SUGERIDO: ${triage.destination}
                         </div>
 
                         <div className="flex gap-1 shrink-0">
+                          {puedeCorregir(p) && !editingRecord && (
+                            <button
+                              onClick={() => startCorrection(p)}
+                              className="flex items-center gap-1 p-1 px-2 bg-white hover:bg-violet-50 rounded-lg border border-slate-200 text-slate-600 hover:text-violet-700 hover:border-violet-300 transition-all cursor-pointer text-xs font-bold"
+                              title="Corregir clasificación (queda registrado)"
+                            >
+                              <Edit3 size={13} /> Corregir
+                            </button>
+                          )}
                           <button 
                             onClick={() => generatePDF(p)}
                             className="p-1 px-1.5 bg-white hover:bg-slate-50 rounded-lg border border-slate-200 text-slate-600 hover:text-blue-600 hover:border-blue-300 transition-all cursor-pointer"
@@ -2199,8 +3039,8 @@ DESTINO SUGERIDO: ${triage.destination}
                 )}>
                   <p className="text-sm font-bold leading-relaxed">
                     {tepModalLevel === 3
-                      ? 'Se han alterado los 3 lados del TEP (Fallo cardiopulmonar / Resucitación). El paciente se clasifica en Nivel I (Rojo). Requiere pase prioritario directo a Shock Room.'
-                      : 'Se han alterado 2 lados del TEP (Dificultad o Shock descompensado). El paciente se clasifica en Nivel II (Naranja - Emergencia, atención en ≤ 15 min).'}
+                      ? 'Se alteraron los 3 lados del TEP. El paciente se clasifica en Nivel I (Rojo). Requiere pase prioritario directo a Shock Room.'
+                      : 'Se alteraron 2 lados del TEP. El paciente se clasifica en Nivel II (Naranja · Emergencia, atención en ≤ 15 min).'}
                   </p>
                 </div>
 
@@ -2217,7 +3057,35 @@ DESTINO SUGERIDO: ${triage.destination}
               </div>
 
               {/* Acciones */}
-              <div className="bg-slate-50 px-6 py-4 flex flex-col sm:flex-row gap-2 sm:justify-end border-t border-slate-100">
+              <div className="bg-slate-50 px-6 py-4 flex flex-col-reverse sm:flex-row gap-2 sm:justify-end border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPatient(p => ({
+                      ...p,
+                      tep: createCleanTep(),
+                      tepStates: { apariencia: 'normal', respiracion: 'normal', circulacion: 'normal' }
+                    }));
+                    setShowSpecifics({ apariencia: false, respiracion: false, circulacion: false });
+                    setTepAlertDismissed(false);
+                    setTepAlertLevelShown(0);
+                    setShowAlertModal(false);
+                  }}
+                  className="px-4 py-3 rounded-xl text-rose-700 bg-rose-50 border border-rose-200 hover:bg-rose-100 font-bold text-xs tracking-wide transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <RotateCcw size={15} className="text-rose-600" />
+                  Deshacer TEP (Volver a Normal)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowAlertModal(false);
+                    setTepAlertLevelShown(tepModalLevel);
+                  }}
+                  className="px-5 py-3 rounded-xl text-slate-700 bg-white border border-slate-300 hover:bg-slate-100 font-bold text-xs tracking-wide transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  Revisar / Modificar selecciones
+                </button>
                 {tepModalLevel === 3 ? (
                   <button
                     type="button"
@@ -2291,7 +3159,7 @@ DESTINO SUGERIDO: ${triage.destination}
                         <span className="text-xs font-black text-amber-900 uppercase tracking-wide">
                           {item.title}
                         </span>
-                        <span className="text-xs font-black font-mono bg-amber-200 text-amber-950 px-2 py-0.5 rounded-lg">
+                        <span className="text-xs font-bold tabular-nums bg-amber-200 text-amber-950 px-2.5 py-0.5 rounded-lg">
                           {item.valStr}
                         </span>
                       </div>
@@ -2308,6 +3176,25 @@ DESTINO SUGERIDO: ${triage.destination}
 
               {/* Acciones */}
               <div className="bg-slate-50 p-6 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPatient(p => ({
+                      ...p,
+                      vitals: {
+                        ...p.vitals!,
+                        temperature: undefined,
+                        oxygenSaturation: undefined,
+                        glucose: undefined
+                      }
+                    }));
+                    setShowAbnormalVitalModal(false);
+                  }}
+                  className="w-full sm:w-auto px-4 py-3 rounded-xl border border-rose-300 text-rose-700 hover:bg-rose-50 font-bold text-xs tracking-wide transition-all cursor-pointer text-center flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  <RotateCcw size={14} />
+                  Deshacer valores anormales
+                </button>
                 <button
                   type="button"
                   onClick={() => setShowAbnormalVitalModal(false)}
@@ -2379,6 +3266,73 @@ DESTINO SUGERIDO: ${triage.destination}
                   className="px-5 py-2.5 rounded-xl text-white bg-amber-500 hover:bg-amber-600 font-bold text-sm tracking-wide transition-all shadow-lg shadow-amber-200 active:scale-95 cursor-pointer"
                 >
                   Entendido
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {showCorrectionModal && editingRecord && (
+          <motion.div
+            key="correction-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              className="bg-white rounded-3xl overflow-hidden shadow-2xl max-w-lg w-full border border-slate-100"
+            >
+              <div className="p-6 bg-violet-600 text-white flex items-center gap-3">
+                <div className="p-2 bg-white/25 rounded-2xl"><Edit3 size={24} /></div>
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-white/80 block">Corrección de triaje</span>
+                  <h3 className="text-base font-black tracking-tight">{editingRecord.name}</h3>
+                </div>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="flex items-center justify-center gap-4 text-sm font-black">
+                  <span className="px-3 py-1.5 rounded-xl bg-slate-100 border border-slate-200">Nivel {editingRecord.triageLevel}</span>
+                  <ChevronRight size={20} className="text-slate-400" />
+                  <span className="px-3 py-1.5 rounded-xl bg-violet-100 text-violet-900 border border-violet-300">Nivel {currentTriage.level}</span>
+                </div>
+                <div className="space-y-1.5">
+                  <label htmlFor="motivo-correccion" className="text-sm font-black text-slate-800">
+                    Motivo de la corrección <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    id="motivo-correccion"
+                    autoFocus
+                    className="w-full p-3 rounded-xl border border-slate-300 focus:ring-2 focus:ring-violet-500 outline-none min-h-[90px] text-sm font-semibold text-slate-800"
+                    placeholder="Ej.: se marcó por error un lado del TEP; se corrige el discriminador."
+                    value={correctionReason}
+                    onChange={e => setCorrectionReason(e.target.value)}
+                  />
+                  <p className="text-xs text-slate-500 font-medium">
+                    Queda registrado quién corrigió, cuándo, la clasificación anterior y la nueva. El registro original no se borra.
+                  </p>
+                </div>
+                {correctionError && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm font-semibold">{correctionError}</div>
+                )}
+              </div>
+              <div className="bg-slate-50 px-6 py-4 flex flex-col sm:flex-row gap-2 sm:justify-end border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowCorrectionModal(false)}
+                  className="px-5 py-2.5 rounded-xl text-slate-700 hover:bg-slate-200 font-bold text-sm cursor-pointer"
+                >
+                  Volver
+                </button>
+                <button
+                  type="button"
+                  onClick={applyCorrection}
+                  disabled={dbSaving}
+                  className="px-5 py-2.5 rounded-xl text-white bg-violet-600 hover:bg-violet-700 font-bold text-sm shadow-lg shadow-violet-200 cursor-pointer disabled:opacity-60"
+                >
+                  {dbSaving ? 'Guardando…' : 'Guardar corrección'}
                 </button>
               </div>
             </motion.div>
@@ -2477,9 +3431,22 @@ DESTINO SUGERIDO: ${triage.destination}
                 <button
                   type="button"
                   onClick={() => {
+                    setPatient(p => ({ ...p, findings: [], otherSymptoms: '' }));
+                    setFindingSearchQuery('');
+                    setShowFindingsAlert(false);
+                    setFindingsAlertDismissed(false);
+                  }}
+                  className="order-3 sm:order-1 px-4 py-2.5 rounded-xl text-rose-700 bg-rose-50 hover:bg-rose-100 font-bold text-xs transition-all border border-rose-200 active:scale-95 cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <RotateCcw size={14} className="text-rose-600" />
+                  Deshacer selecciones
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setShowFindingsAlert(false);
                   }}
-                  className="order-2 sm:order-1 px-5 py-2.5 rounded-xl text-slate-600 bg-white hover:bg-slate-150 font-bold text-sm transition-all border border-slate-200 active:scale-95 cursor-pointer"
+                  className="order-2 sm:order-2 px-5 py-2.5 rounded-xl text-slate-600 bg-white hover:bg-slate-150 font-bold text-sm transition-all border border-slate-200 active:scale-95 cursor-pointer"
                 >
                   Reevaluar Motivos
                 </button>
@@ -2490,9 +3457,65 @@ DESTINO SUGERIDO: ${triage.destination}
                     setShowFindingsAlert(false);
                     setStep(4);
                   }}
-                  className="order-1 sm:order-2 px-5 py-2.5 rounded-xl text-white bg-blue-600 hover:bg-blue-700 font-bold text-sm tracking-wide transition-all shadow-lg shadow-blue-200 active:scale-95 cursor-pointer"
+                  className="order-1 sm:order-3 px-5 py-2.5 rounded-xl text-white bg-blue-600 hover:bg-blue-700 font-bold text-sm tracking-wide transition-all shadow-lg shadow-blue-200 active:scale-95 cursor-pointer"
                 >
                   Confirmar y Avanzar
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {showResetModal && (
+          <motion.div
+            key="reset-triage-modal"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-3xl overflow-hidden shadow-2xl max-w-md w-full border border-slate-100"
+            >
+              <div className="bg-rose-600 p-6 text-white flex items-center gap-3">
+                <div className="p-2 bg-white/20 rounded-2xl">
+                  <RotateCcw size={28} className="text-white" />
+                </div>
+                <div>
+                  <span className="text-[10px] font-black tracking-widest uppercase text-white/90 block">
+                    Acción de Deshacer
+                  </span>
+                  <h3 className="text-base font-black tracking-tight uppercase">
+                    ¿Reiniciar formulario de triaje?
+                  </h3>
+                </div>
+              </div>
+              <div className="p-6 space-y-3">
+                <p className="text-sm font-semibold text-slate-700 leading-relaxed">
+                  Se descartarán todas las selecciones y datos cargados en esta evaluación actual (datos del paciente, TEP, problemas seleccionados y signos vitales).
+                </p>
+                <p className="text-xs font-medium text-slate-500">
+                  Esta acción no afecta a los pacientes ya guardados en el historial ni a la base de datos remota.
+                </p>
+              </div>
+              <div className="bg-slate-50 p-4 border-t border-slate-100 flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setShowResetModal(false)}
+                  className="px-5 py-2.5 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-100 font-bold text-xs tracking-wide transition-all cursor-pointer"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={resetEntireTriage}
+                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-black text-xs tracking-wide transition-all shadow-md shadow-rose-200 flex items-center gap-1.5 cursor-pointer active:scale-95"
+                >
+                  <Trash2 size={15} />
+                  Sí, reiniciar y borrar todo
                 </button>
               </div>
             </motion.div>
@@ -2502,4 +3525,3 @@ DESTINO SUGERIDO: ${triage.destination}
     </div>
   );
 }
-

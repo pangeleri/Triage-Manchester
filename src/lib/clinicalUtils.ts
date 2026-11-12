@@ -93,9 +93,10 @@ export const getVitalsRequirementsByLevel = (levelStr: TriageLevel) => {
       glucose: false,
     };
   }
+  // Para niveles IV (Poco urgente) y V (No urgente), todos los signos vitales son optativos
   return {
-    heartRate: true,
-    respiratoryRate: true,
+    heartRate: false,
+    respiratoryRate: false,
     systolicBP: false,
     diastolicBP: false,
     oxygenSaturation: false,

@@ -112,8 +112,32 @@ export interface PatientData {
   fechaObjetivoEvaluacion?: string;
   motivoNoObtencion?: string;
   
+  // Auditoría y autoría
+  creadoPor?: string;
+  creadoPorNombre?: string;
+
   reevaluaciones?: ReevaluacionData[];
+  correcciones?: CorreccionData[];
 }
+
+export interface CorreccionData {
+  id?: string;
+  episodioId: string;
+  nivelPrevio: number;
+  nivelNuevo: number;
+  motivo: string;
+  datosPrevios: any;
+  datosNuevos: any;
+  corregidoPor?: string;
+  corregidoPorNombre?: string;
+  fecha: string;
+}
+
+export const ESTADOS_CORREGIBLES: EstadoOperativo[] = [
+  'preliminar_critico',
+  'en_espera',
+  'llamado'
+];
 
 export interface ClinicalMatrixItem {
   I: string[];
@@ -132,443 +156,422 @@ export interface ClinicalSystem {
 
 export const CLINICAL_SYSTEMS: ClinicalSystem[] = [
   {
-    id: 'respiratorio',
-    name: 'Respiratorio',
-    description: 'Sistema Respiratorio / Vía Aérea',
+    id: 'abuso',
+    name: 'Abuso',
+    description: 'Abuso, Maltrato o Conflicto',
     matrix: {
       I: [
-        'Paro respiratorio inminente u obstrucción total de la vía aérea',
-        'Cianosis central de origen respiratorio con signos de shock'
+        'Situación o conflicto inespecífico'
       ],
       II: [
-        'Estridor agudo o dificultad respiratoria severa con tirajes y agotamiento',
-        'Dificultad respiratoria severa con incapacidad para hablar',
-        'Broncoespasmo severo con agotamiento respiratorio'
+        'Riesgo actual'
       ],
       III: [
-        'Dificultad respiratoria moderada persistente',
-        'Broncoespasmo moderado con sibilancias y taquipnea'
+        'Agresión física',
+        'Abuso sexual en últimas 72 horas'
       ],
       IV: [
-        'Infección respiratoria alta con estado general conservado'
+        'Antecedentes o signos de abuso'
       ],
-      V: [
-        'Congestión nasal o molestia faríngea leve sin dificultad respiratoria'
-      ]
-    }
-  },
-  {
-    id: 'cardiovascular',
-    name: 'Cardiovascular',
-    description: 'Sistema Cardiovascular / Shock / Dolor Torácico',
-    matrix: {
-      I: [
-        'Paro cardiorrespiratorio presenciado',
-        'Shock o inestabilidad hemodinámica profunda',
-        'Arritmia activa con descompensación hemodinámica o síncope'
-      ],
-      II: [
-        'Síncope de inicio súbito con alteración hemodinámica',
-        'Hemorragia mayor activa con inestabilidad potencial'
-      ],
-      III: [
-        'Palpitaciones aisladas sin compromiso hemodinámico',
-        'Dolor torácico atípico sin signos de alarma'
-      ],
-      IV: [],
       V: []
     }
   },
   {
-    id: 'neurologico',
-    name: 'Neurológico',
-    description: 'Sistema Neurológico y Conciencia',
+    id: 'cardiovascular',
+    name: 'Cardiovascular / Circulación',
+    description: 'Sistema Cardiovascular y Trastornos Circulatorios',
     matrix: {
       I: [
-        'Inconsciencia profunda o coma',
-        'Convulsión activa continua o repetida'
+        'Paro cardíaco (o inminente)',
+        'Hipotensión',
+        'Shock',
+        'Taquicardia (FC>2DS)',
+        'Bradicardia (FC<-2DS)',
+        'Hemorragia con shock'
       ],
       II: [
-        'Déficit neurológico focal agudo o sospecha de evento vascular',
-        'Alteración aguda del estado de conciencia o confusión mental'
+        'Taquicardia (FC en el rango de +2DS)',
+        'Bradicardia (FC en el rango de -2DS)',
+        'Deshidratación severa',
+        'Hemorragia severa incontrolable'
       ],
       III: [
-        'Crisis convulsiva resuelta con recuperación completa de conciencia',
-        'Síncope o desmayo recuperado espontáneamente',
-        'Cefalea de intensidad moderada sin signos de alarma'
+        'Taquicardia (FC en el rango de +1DS)',
+        'Bradicardia (FC en el rango de -1DS)',
+        'Deshidratación moderada',
+        'Hemorragia menor'
       ],
       IV: [
-        'Mareo inespecífico sin déficit neurológico',
-        'Asimetría facial aguda de origen periférico'
+        'Dolor torácico leve'
       ],
-      V: [
-        'Cefalea leve o molestia craneal habitual'
-      ]
-    }
-  },
-  {
-    id: 'musculoesqueletico',
-    name: 'Músculo-esquelético',
-    description: 'Sistema Músculo-esquelético y Articular',
-    matrix: {
-      I: [
-        'Traumatismo musculoesquelético grave con inestabilidad o hemorragia masiva',
-        'Amputación proximal de extremidad con sangrado activo severo'
-      ],
-      II: [
-        'Traumatismo grave de extremidad con deformidad severa',
-        'Amputación distal de dedo o mano',
-        'Fractura expuesta o con compromiso circulatorio distal',
-        'Dolor dorsal o lumbar severo con sospecha de compresión medular',
-        'Avulsión dentaria traumática',
-        'Lesión grave por congelamiento o frío extremo'
-      ],
-      III: [
-        'Traumatismo de extremidad con sospecha de fractura cerrada alineada',
-        'Dolor articular o muscular agudo moderado sin signos de alarma',
-        'Yeso o vendaje ortopédico demasiado ajustado con dolor',
-        'Traumatismo dental sin pérdida de pieza'
-      ],
-      IV: [
-        'Esguince o contusión leve sin deformidad',
-        'Dolor muscular o articular leve localizado',
-        'Inflamación o edema leve tras traumatismo menor'
-      ],
-      V: [
-        'Retiro de puntos o curación simple programada',
-        'Consulta por dolor crónico muscular o articular de larga evolución'
-      ]
-    }
-  },
-  {
-    id: 'gastrointestinal',
-    name: 'Gastrointestinal',
-    description: 'Aparato Digestivo y Abdominal',
-    matrix: {
-      I: [
-        'Obstrucción de vía aérea por vómito con asfixia',
-        'Hemorragia digestiva masiva con shock'
-      ],
-      II: [
-        'Dolor abdominal agudo intenso con sospecha de abdomen quirúrgico',
-        'Hemorragia digestiva alta activa con vómitos sanguinolentos',
-        'Evisceración o hernia estrangulada irreductible'
-      ],
-      III: [
-        'Vómitos o diarrea persistentes con deshidratación moderada',
-        'Dolor abdominal moderado sin signos de peritonitis',
-        'Sangrado digestivo bajo escaso sin alteración hemodinámica'
-      ],
-      IV: [
-        'Gastroenteritis aguda con buena tolerancia oral',
-        'Diarrea o estreñimiento reciente sin dolor intenso',
-        'Reflujo gastroesofágico o acidez sintomática leve'
-      ],
-      V: [
-        'Estreñimiento crónico sin dolor agudo ni vómitos',
-        'Dolor abdominal leve crónico recurrente sin cambios agudos'
-      ]
-    }
-  },
-  {
-    id: 'trauma',
-    name: 'Trauma / Quemaduras',
-    description: 'Traumatismos, Quemaduras y Heridas',
-    matrix: {
-      I: [
-        'Traumatismo craneoencefálico o espinal grave inestable',
-        'Quemadura extensa profunda o con sospecha de compromiso de vía aérea'
-      ],
-      II: [
-        'Herida penetrante o cortante con sangrado arterial profuso',
-        'Quemadura de extensión moderada o en áreas críticas',
-        'Traumatismo ocular severo con compromiso visual agudo'
-      ],
-      III: [
-        'Quemadura superficial o de extensión moderada localizada',
-        'Herida que requiere sutura con sangrado controlado',
-        'Cuerpo extraño en conducto auditivo o nariz con dolor',
-        'Hemorragia nasal activa que cede con compresión local'
-      ],
-      IV: [
-        'Quemadura superficial leve localizada',
-        'Herida menor superficial, erosión o raspadura',
-        'Traumatismo ocular leve con molestia sin pérdida de visión'
-      ],
-      V: [
-        'Curación de herida menor programada',
-        'Cuerpo extraño superficial no urgente y asintomático'
-      ]
-    }
-  },
-  {
-    id: 'abuso',
-    name: 'Abuso / Violencia',
-    description: 'Violencia, Abuso o Maltrato',
-    matrix: {
-      I: [
-        'Abuso físico o agresión violenta aguda con compromiso hemodinámico o de conciencia'
-      ],
-      II: [
-        'Abuso sexual agudo reciente para profilaxis y resguardo',
-        'Maltrato físico agudo en niño o adulto con lesiones evidentes'
-      ],
-      III: [
-        'Sospecha de maltrato o violencia con afectación emocional aguda',
-        'Negligencia activa o situación de vulnerabilidad aguda'
-      ],
-      IV: [
-        'Sospecha o antecedente de violencia intrafamiliar sin lesiones agudas',
-        'Situación de conflicto intrafamiliar sin descompensación actual'
-      ],
-      V: [
-        'Solicitud de informe social u orientación por antecedentes de violencia'
-      ]
+      V: []
     }
   },
   {
     id: 'dermatologico',
     name: 'Dermatológico',
-    description: 'Piel y Tejido Subcutáneo',
+    description: 'Piel, Quemaduras, Heridas y Tejido Subcutáneo',
     matrix: {
       I: [
-        'Lesiones ampollares o descamativas agudas generalizadas con shock',
-        'Reacción alérgica severa con hinchazón de labios, lengua y dificultad respiratoria'
+        'Quemadura ≥ 25% de SC'
       ],
       II: [
-        'Enrojecimiento y descamación cutánea generalizada aguda',
-        'Urticaria o hinchazón alérgica generalizada sin dificultad respiratoria',
-        'Infección cutánea severa con sospecha de necrosis o dolor desproporcionado'
+        'Quemadura ≥ 10% de SC',
+        'Quemadura de cara/manos',
+        'Quemadura química/eléctrica',
+        'Exantema purpúrico-petequial'
       ],
       III: [
-        'Infección cutánea febril de avance rápido',
-        'Erupción con ampollas o dolor localizado intenso',
-        'Lesión dérmica por contacto con producto químico localizada'
+        'Quemadura < 10% de SC',
+        'Lesión por frío localizada',
+        'Celulitis + fiebre',
+        'Herida complicada (profunda)'
       ],
       IV: [
-        'Infección cutánea localizada sin fiebre',
-        'Erupción alérgica o picaduras localizadas leves',
-        'Absceso localizado para drenaje'
+        'Quemadura leve',
+        'Lesión por frío leve',
+        'Celulitis localizada',
+        'Herida simple (superficial)'
       ],
       V: [
-        'Picazón cutánea crónica o micosis superficial habitual',
-        'Erupción cutánea crónica estable sin cambios agudos'
-      ]
-    }
-  },
-  {
-    id: 'endocrinologico',
-    name: 'Endocrino / Metabólico',
-    description: 'Sistema Metabólico y Endocrinológico',
-    matrix: {
-      I: [
-        'Coma metabólico o descompensación diabética severa con pérdida de conciencia'
-      ],
-      II: [
-        'Hipoglucemia confirmada con síntomas',
-        'Descompensación diabética aguda con deshidratación severa o vómitos'
-      ],
-      III: [
-        'Hiperglucemia sintomática con malestar general sin alteración de conciencia',
-        'Sospecha de insuficiencia suprarrenal aguda'
-      ],
-      IV: [
-        'Hiperglucemia leve o alteración aislada en control sin síntomas de alarma'
-      ],
-      V: [
-        'Control o medición de rutina de glucemia'
+        'Quemadura superficial',
+        'Abrasión, laceración leve',
+        'Contusión leve',
+        'Exantema localizado',
+        'Picadura'
       ]
     }
   },
   {
     id: 'dolor',
     name: 'Dolor',
-    description: 'Manejo del Dolor Agudo y Crónico Reagudizado',
+    description: 'Evaluación y Manejo del Dolor',
     matrix: {
-      I: [
-        'Dolor extremo intratable asociado a shock o traumatismo severo'
-      ],
+      I: [],
       II: [
-        'Dolor agudo severo de máxima intensidad'
+        'Severo 8-10/10'
       ],
       III: [
-        'Dolor agudo de intensidad moderada',
-        'Dolor crónico reagudizado de moderada intensidad'
+        'Moderado 4-7/10'
       ],
       IV: [
-        'Dolor localizado leve',
-        'Molestia o dolor muscular leve'
+        'Leve 1-3/10'
+      ],
+      V: []
+    }
+  },
+  {
+    id: 'endocrinologico',
+    name: 'Endocrinológico',
+    description: 'Sistema Endocrinológico y Metabólico',
+    matrix: {
+      I: [
+        'Diabetes mellitus con alteración del sensorio'
+      ],
+      II: [
+        'Diabetes mellitus con CAD'
+      ],
+      III: [
+        'Diabetes mellitus con hipoglucemia'
+      ],
+      IV: [],
+      V: []
+    }
+  },
+  {
+    id: 'gastroenterologico',
+    name: 'Gastroenterológico / Abdominal',
+    description: 'Aparato Digestivo, Abdomen y Vómitos / Diarrea',
+    matrix: {
+      I: [
+        'Trauma penetrante / contuso + shock',
+        'Disfagia + compromiso vía aérea'
+      ],
+      II: [
+        'Hematemesis / enterorragia',
+        'Dolor abdominal severo'
+      ],
+      III: [
+        'Vómitos persistentes / biliosos',
+        'Vómitos/diarrea < 2 años'
+      ],
+      IV: [
+        'Constipación',
+        'Dolor abdominal leve',
+        'Vómitos/diarrea > 2 años'
       ],
       V: [
-        'Dolor crónico de baja intensidad habitual en tratamiento'
+        'Vómitos/diarrea aislados'
       ]
     }
   },
   {
     id: 'hematologico',
-    name: 'Hematológico',
-    description: 'Sistema Hematológico e Inmunológico',
+    name: 'Hematológico / Inmunológico',
+    description: 'Sistema Hematológico, Inmunológico y Alergias',
     matrix: {
       I: [
-        'Reacción transfusional aguda con shock',
-        'Fiebre en paciente con defensas bajas con signos de shock'
+        'Anafilaxia + shock'
       ],
       II: [
-        'Fiebre en paciente con defensas bajas o tratamiento oncológico',
-        'Crisis de dolor óseo agudo severo en enfermedad hematológica conocida',
-        'Sangrado activo en paciente con trastorno de coagulación conocido'
+        'Trastorno de hemostasia',
+        'Neutropenia febril',
+        'Inmunocompromiso con fiebre',
+        'Anafilaxia sin shock'
       ],
       III: [
-        'Palidez y cansancio agudo con sospecha de anemia sintomática',
-        'Aparición aguda de petequias o hematomas múltiples sin sangrado activo',
-        'Reacción transfusional febril leve'
+        'Reacción alérgica moderada'
       ],
       IV: [
-        'Ganglios aumentados de tamaño o dolorosos de evolución reciente',
-        'Anemia crónica conocida sin síntomas agudos'
+        'Reacción alérgica localizada'
       ],
-      V: [
-        'Ganglios crónicos estables sin dolor'
-      ]
+      V: []
     }
   },
   {
     id: 'infectologico',
     name: 'Infectológico',
-    description: 'Infección Sistémica y Fiebre',
+    description: 'Infecciones, Sepsis y Síndromes Febriles',
     matrix: {
       I: [
-        'Manchas violáceas de aparición fulminante con shock',
-        'Infección generalizada grave con hipotensión y shock'
+        'Shock séptico'
       ],
       II: [
-        'Sospecha de infección sistémica con taquicardia y taquipnea',
-        'Fiebre en lactante menor de tres meses',
-        'Fiebre con rigidez de nuca y decaimiento marcado'
+        'T° > 37,5 °C en menor de 1 mes, o T° > 38 °C en menor de 3 meses',
+        'Hipotermia',
+        'Aspecto séptico',
+        'Neutropenia febril',
+        'Inmunocompromiso con fiebre'
       ],
       III: [
-        'Síndrome febril en paciente inmunocomprometido',
-        'Fiebre alta persistente con sospecha de foco infeccioso profundo',
-        'Picadura de insecto infectada con inflamación progresiva'
+        'Fiebre en niño de 3-36 meses'
       ],
       IV: [
-        'Síndrome febril simple sin signos de alarma ni compromiso general',
-        'Infección localizada leve de piel o tejido celular'
+        'Fiebre en niño > 36 meses'
       ],
-      V: [
-        'Consulta por sospecha de parásitos sin complicaciones'
-      ]
+      V: []
+    }
+  },
+  {
+    id: 'musculoesqueletico',
+    name: 'Músculo-esquelético',
+    description: 'Traumatismos, Fracturas y Lesiones Músculo-esqueléticas',
+    matrix: {
+      I: [
+        'Trauma grave con ITP ≤ 5',
+        'Amputación de extremidad'
+      ],
+      II: [
+        'Trauma grave con ITP 6 a 8',
+        'Amputación de dedo',
+        'Fractura expuesta y/o con déficit neurovascular',
+        'Dolor de espalda con síntomas neurológicos',
+        'Avulsión de diente definitivo',
+        'Injuria grave por frío, hipotermia'
+      ],
+      III: [
+        'Trauma con ITP ≥ 9',
+        'Fractura sin déficit neuro',
+        'Yeso apretado',
+        'Dolor articular y/o impotencia funcional + fiebre',
+        'Trauma dental (fractura, luxación)'
+      ],
+      IV: [
+        'Dolor localizado sin deformación',
+        'Esguince, contusión',
+        'Inflamación de extremidad'
+      ],
+      V: []
     }
   },
   {
     id: 'nefrologico',
-    name: 'Urológico / Renal',
-    description: 'Sistema Renal, Urológico y Ginecológico',
+    name: 'Nefro - Urológico / Ginecológico',
+    description: 'Sistema Renal, Vías Urinarias y Ginecológico',
     matrix: {
       I: [
-        'Sangrado urinario masivo con descompensación o shock'
+        'Metrorragia + shock'
       ],
       II: [
-        'Retención aguda de orina dolorosa con distensión vesical severa',
-        'Cólico renal severo con dolor intenso y vómitos',
-        'Dolor testicular o pélvico agudo unilateral severo de inicio súbito',
-        'Infección urinaria con fiebre alta y decaimiento marcado'
+        'Dolor testicular severo',
+        'Anuria > 24 horas',
+        'Parafimosis',
+        'Priapismo',
+        'Dolor abdominopélvico',
+        'Metrorragia severa'
       ],
       III: [
-        'Sangrado en orina visible sin mareos ni descompensación',
-        'Dificultad o retención urinaria reciente sin distensión extrema',
-        'Dolor pélvico agudo de intensidad moderada',
-        'Infección urinaria con fiebre moderada'
+        'Dolor / inflamación testicular',
+        'Masa inguinal con dolor',
+        'Anuria > 8 horas',
+        'Metrorragia moderada'
       ],
       IV: [
-        'Ardor o molestias urinarias sin fiebre',
-        'Flujo o molestia pélvica leve'
+        'Trauma escrotal',
+        'Sospecha de ITU'
       ],
-      V: [
-        'Recambio o control programado de sonda vesical permeable',
-        'Incontinencia urinaria crónica sin cambios agudos'
-      ]
+      V: []
+    }
+  },
+  {
+    id: 'neurologico',
+    name: 'Neurológico / Neuropsiquiátrico',
+    description: 'Sistema Nervioso Central, Conciencia, Convulsiones y Salud Mental',
+    matrix: {
+      I: [
+        'TEC grave (Glasgow < 10)',
+        'Arreactivo',
+        'Convulsivo (activa)'
+      ],
+      II: [
+        'TEC moderado (Glasgow 10 a 13)',
+        'Alteración de nivel de conciencia',
+        'Cefalea severa',
+        'Disfunción de DVP (Glasgow < 15, somnolencia/irritabilidad o cefalea severa)',
+        'Trastorno agudo del sistema nervioso',
+        'Letargia/mala actitud alimentaria en neonato',
+        'Riesgo alto de auto/heteroagresión'
+      ],
+      III: [
+        'TEC leve (Glasgow 14) y/o en menor de 2 años',
+        'Antecedente de pérdida de conciencia',
+        'Cefalea moderada',
+        'Posible disfunción de DVP (portador de DVP con vómitos/cefalea leve y Glasgow 15)',
+        'Convulsión (resuelta)',
+        'Irritable e Inconsolable / Rechazo de alimento en lactante',
+        'Riesgo moderado de auto/heteroagresión',
+        'Excitado'
+      ],
+      IV: [
+        'TEC leve',
+        'Cefalea crónica',
+        'Conducta anormal / Antecedente de trastorno en el comportamiento',
+        'Irritable pero consolable',
+        'Bajo riesgo de auto/heteroagresión',
+        'Trastorno depresivo'
+      ],
+      V: []
     }
   },
   {
     id: 'oftalmologico',
     name: 'Oftalmológico',
-    description: 'Ojos y Visión',
+    description: 'Ojos, Visión y Traumatismos Oculares',
     matrix: {
-      I: [
-        'Traumatismo ocular grave con herida abierta del globo ocular'
-      ],
+      I: [],
       II: [
-        'Herida penetrante ocular o quemadura por químicos en ojos',
-        'Pérdida súbita de la visión en un ojo'
+        'Exposición química',
+        'Herida penetrante',
+        'Celulitis orbitaria'
       ],
       III: [
-        'Cuerpo extraño en ojo con dolor o molestia moderada',
-        'Inflamación ocular aguda con dolor moderado y molestia a la luz'
+        'Alteración aguda de la vista',
+        'Celulitis periorbitaria'
       ],
       IV: [
-        'Ojo rojo con secreción sin dolor ni pérdida visual',
-        'Inflamación dolorosa localizada en párpado'
+        'Lagrimeo / secreción ocular',
+        'Cuerpo extraño corneal'
       ],
       V: [
-        'Derrame o mancha roja en ojo sin dolor ni pérdida de visión',
-        'Molestia ocular leve habitual sin dolor'
+        'Conjuntivitis'
       ]
     }
   },
   {
     id: 'otorrinolaringologico',
-    name: 'Oído, Nariz y Garganta',
-    description: 'Otorrinolaringología',
+    name: 'Otorrinolaringológico',
+    description: 'Oído, Nariz, Garganta y Vía Aérea Alta',
     matrix: {
       I: [
-        'Sangrado nasal masivo con compromiso de la vía aérea'
+        'Compromiso de vía aérea'
       ],
       II: [
-        'Cuerpo extraño en vía aérea alta con dificultad o estridor',
-        'Dolor de oído intenso con inflamación retroauricular o supuración'
+        'Amputación de oreja',
+        'Epistaxis no controlada',
+        'Hemorragia postquirúrgica',
+        'Dolor de garganta con babeo/estridor',
+        'Disfagia/dolor de garganta/ronquera posttrauma'
       ],
       III: [
-        'Sangrado nasal activo que disminuye con compresión local',
-        'Cuerpo extraño en oído o nariz con molestia',
-        'Dolor de oído agudo moderado'
+        'Cuerpo extraño en fosas nasales/oídos',
+        'Epistaxis controlada',
+        'Exudados amigdalinos con disfagia',
+        'Sordera aguda',
+        'Antecedente de hemorragia postquirúrgica'
       ],
       IV: [
-        'Dolor de oído leve o dolor de garganta sin dificultad para tragar',
-        'Disminución auditiva de inicio reciente en un oído'
+        'Otorrea',
+        'Otalgia'
       ],
       V: [
-        'Tapón de cerumen o molestia auditiva crónica sin dolor',
-        'Molestia faríngea leve o irritación habitual'
+        'Dolor de garganta',
+        'Congestión nasal',
+        'Tos ronca, afonía, sin estridor'
       ]
     }
   },
   {
-    id: 'toxicologico',
-    name: 'Toxicológico / Salud Mental',
-    description: 'Toxicología y Urgencias de Salud Mental',
+    id: 'respiratorio',
+    name: 'Respiratorio',
+    description: 'Aparato Respiratorio y Dificultad Respiratoria',
     matrix: {
       I: [
-        'Coma o paro respiratorio por intoxicación o sobredosis',
-        'Conducta violenta inmediata o agitación extrema con riesgo físico inminente'
+        'Paro Respiratorio',
+        'Compromiso de vía aérea',
+        'DR severa',
+        'Trauma torácico con DR/Shock'
       ],
       II: [
-        'Ingesta de tóxico o sobredosis de medicamentos reciente',
-        'Ideación de autoagresión estructurada o intento reciente',
-        'Crisis de agitación psicomotriz o agresividad aguda'
+        'Estridor grave',
+        'DR moderada',
+        'Aspiración de CE con DR',
+        'Disnea severa'
       ],
       III: [
-        'Descompensación emocional o psíquica sin conducta violenta ni riesgo inminente',
-        'Crisis de angustia o pánico intensa'
+        'Estridor leve',
+        'DR leve',
+        'Aspiración de CE sin DR',
+        'Tos constante'
       ],
       IV: [
-        'Crisis de angustia leve reactiva o llanto persistente',
-        'Situación de estrés reactivo sin riesgo de agresión'
+        'Tos persistente con antecedente de asma / BOR',
+        'Posible aspiración de CE sin DR',
+        'Traumatismo torácico menor sin DR',
+        'Dolor torácico leve'
       ],
+      V: []
+    }
+  },
+  {
+    id: 'toxicologico',
+    name: 'Toxicológico',
+    description: 'Toxicología y Contacto con Sustancias Tóxicas',
+    matrix: {
+      I: [],
+      II: [
+        'Contacto con tóxicos'
+      ],
+      III: [],
+      IV: [],
       V: []
     }
   }
 ];
+
+export const PAED_CTAS_ABBREVIATIONS: Record<string, string> = {
+  BOR: 'Bronquitis obstructiva recurrente',
+  CAD: 'Cetoacidosis diabética',
+  CE: 'Cuerpo extraño',
+  DR: 'Dificultad respiratoria',
+  DS: 'Desvío estándar',
+  DVP: 'Derivación ventrículo-peritoneal',
+  FC: 'Frecuencia cardíaca',
+  FR: 'Frecuencia respiratoria',
+  ITP: 'Índice de Trauma Pediátrico',
+  ITU: 'Infección del tracto urinario',
+  SC: 'Superficie corporal',
+  TEC: 'Traumatismo encefalocraneano'
+};
 
 export const FINDINGS = {
   LEVEL_I: CLINICAL_SYSTEMS.flatMap(sys => sys.matrix.I),
@@ -577,3 +580,14 @@ export const FINDINGS = {
   LEVEL_IV: CLINICAL_SYSTEMS.flatMap(sys => sys.matrix.IV),
   LEVEL_V: CLINICAL_SYSTEMS.flatMap(sys => sys.matrix.V)
 };
+
+export function findFindingMeta(finding: string): { sistema: string; nivel: number } | null {
+  for (const sys of CLINICAL_SYSTEMS) {
+    if (sys.matrix.I.includes(finding)) return { sistema: sys.id, nivel: 1 };
+    if (sys.matrix.II.includes(finding)) return { sistema: sys.id, nivel: 2 };
+    if (sys.matrix.III.includes(finding)) return { sistema: sys.id, nivel: 3 };
+    if (sys.matrix.IV.includes(finding)) return { sistema: sys.id, nivel: 4 };
+    if (sys.matrix.V.includes(finding)) return { sistema: sys.id, nivel: 5 };
+  }
+  return null;
+}

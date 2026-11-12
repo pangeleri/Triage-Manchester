@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { PatientData, ReevaluacionData } from '../types';
+import { PatientData, ReevaluacionData, CorreccionData, findFindingMeta } from '../types';
 
 const rawUrl = (import.meta as any).env.VITE_SUPABASE_URL || '';
 const rawAnonKey = (import.meta as any).env.VITE_SUPABASE_ANON_KEY || '';
@@ -57,7 +57,8 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
           objetivo_evaluacion_minutos: record.objetivoEvaluacionMinutos || null,
           fecha_objetivo_evaluacion: record.fechaObjetivoEvaluacion || null,
           arrival_date: record.arrivalDate,
-          motivo_no_obtencion: record.motivoNoObtencion || null
+          motivo_no_obtencion: record.motivoNoObtencion || null,
+          creado_por: record.creadoPor || null
         }
       ]);
 
@@ -84,7 +85,8 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
           escala_dolor: null,
           puntaje_dolor: null,
           avdi: record.vitals.avpu || null,
-          motivo_no_obtencion: record.motivoNoObtencion || null
+          motivo_no_obtencion: record.motivoNoObtencion || null,
+          creado_por: record.creadoPor || null
         }
       ]);
 
@@ -115,14 +117,19 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
 
     // 4. Insert into discriminadores_triaje_pediatrico for each finding
     if (record.findings && record.findings.length > 0) {
-      const findingsRows = record.findings.map(finding => ({
-        episodio_id: record.id,
-        codigo_discriminador: null,
-        sistema: 'general',
-        etiqueta: finding,
-        nivel_ctas_asociado: record.nivelCtasFinal,
-        estado_validacion: 'validado'
-      }));
+      const findingsRows = record.findings.map(finding => {
+        const meta = findFindingMeta(finding);
+        return {
+          episodio_id: record.id,
+          codigo_discriminador: null,
+          sistema: meta?.sistema || 'general',
+          etiqueta: finding,
+          nivel_ctas_asociado: meta?.nivel || record.nivelCtasFinal,
+          estado_validacion: 'validado',
+          registrado_por: record.creadoPor || null,
+          vigente: true
+        };
+      });
 
       const { error: discError } = await supabase
         .from('discriminadores_triaje_pediatrico')
@@ -218,6 +225,128 @@ export async function updateOperationalState(id: string, state: string): Promise
 }
 
 /**
+ * Saves a clinical correction to Supabase, logging prior and new states.
+ */
+export async function saveCorrection(
+  record: PatientData,
+  correccion: CorreccionData
+): Promise<{ success: boolean; error?: string }> {
+  if (!supabase) return { success: false, error: 'Supabase no está configurado.' };
+
+  try {
+    const ageMonths = record.ageUnit === 'meses' ? record.age : (record.age ? record.age * 12 : null);
+
+    const discriminadoresPayload = (record.findings || []).map(finding => {
+      const meta = findFindingMeta(finding);
+      return {
+        sistema: meta?.sistema || 'general',
+        etiqueta: finding,
+        nivel: meta?.nivel || record.nivelCtasFinal
+      };
+    });
+
+    const payload = {
+      nivel_previo: correccion.nivelPrevio,
+      nivel_nuevo: correccion.nivelNuevo,
+      motivo: correccion.motivo,
+      datos_previos: correccion.datosPrevios,
+      datos_nuevos: correccion.datosNuevos,
+      corregido_por_nombre: correccion.corregidoPorNombre || null,
+      episodio: {
+        nombre: record.name || null,
+        edad_meses: ageMonths !== undefined ? ageMonths : null,
+        sexo: record.gender || null,
+        documento_identidad: record.documentId || null,
+        motivo_consulta_cedis: record.otherSymptoms || null,
+        objetivo_evaluacion_minutos: record.objetivoEvaluacionMinutos || null,
+        fecha_objetivo_evaluacion: record.fechaObjetivoEvaluacion || null
+      },
+      signos: {
+        frecuencia_cardiaca: record.vitals.heartRate !== undefined ? record.vitals.heartRate : null,
+        frecuencia_respiratoria: record.vitals.respiratoryRate !== undefined ? record.vitals.respiratoryRate : null,
+        frecuencia_respiratoria_ds: record.frecuenciaRespiratoriaDs || 'no_calculado',
+        temperatura: record.vitals.temperature !== undefined ? record.vitals.temperature : null,
+        saturacion_oxigeno: record.vitals.oxygenSaturation !== undefined ? record.vitals.oxygenSaturation : null,
+        glucemia: record.vitals.glucose !== undefined ? record.vitals.glucose : null,
+        tension_arterial_sistolica: record.vitals.systolicBP !== undefined ? record.vitals.systolicBP : null,
+        tension_arterial_diastolica: record.vitals.diastolicBP !== undefined ? record.vitals.diastolicBP : null,
+        avdi: record.vitals.avpu || null
+      },
+      tep: {
+        apariencia: record.tepStates?.apariencia || 'no_evaluado',
+        respiracion: record.tepStates?.respiracion || 'no_evaluado',
+        circulacion: record.tepStates?.circulacion || 'no_evaluado'
+      },
+      discriminadores: discriminadoresPayload
+    };
+
+    // Try RPC first (function from supabase_correcciones.sql)
+    const { error: rpcError } = await supabase.rpc('corregir_triaje', {
+      p_episodio_id: record.id,
+      p: payload
+    });
+
+    if (rpcError) {
+      console.warn('RPC corregir_triaje:', rpcError.message);
+      // Fallback: direct table operations
+      const { data: userData } = await supabase.auth.getUser();
+      const currentUserId = userData?.user?.id || correccion.corregidoPor;
+
+      const { error: corError } = await supabase.from('correcciones_triaje_pediatrico').insert([{
+        episodio_id: record.id,
+        nivel_ctas_previo: correccion.nivelPrevio,
+        nivel_ctas_nuevo: correccion.nivelNuevo,
+        motivo: correccion.motivo,
+        datos_previos: correccion.datosPrevios,
+        datos_nuevos: correccion.datosNuevos,
+        corregido_por: currentUserId,
+        corregido_por_nombre: correccion.corregidoPorNombre || null
+      }]);
+
+      if (corError) {
+        return { success: false, error: corError.message };
+      }
+
+      await supabase.from('episodios_triaje_pediatrico').update({
+        nombre: record.name || null,
+        edad_meses: ageMonths !== undefined ? ageMonths : null,
+        sexo: record.gender || null,
+        documento_identidad: record.documentId || null,
+        motivo_consulta_cedis: record.otherSymptoms || null,
+        nivel_ctas_final: record.nivelCtasFinal,
+        objetivo_evaluacion_minutos: record.objetivoEvaluacionMinutos || null,
+        fecha_objetivo_evaluacion: record.fechaObjetivoEvaluacion || null,
+        fecha_actualizacion: new Date().toISOString(),
+        actualizado_por: currentUserId
+      }).eq('id', record.id);
+
+      await supabase.from('signos_vitales_triaje_pediatrico').update({
+        frecuencia_cardiaca: record.vitals.heartRate !== undefined ? record.vitals.heartRate : null,
+        frecuencia_respiratoria: record.vitals.respiratoryRate !== undefined ? record.vitals.respiratoryRate : null,
+        frecuencia_respiratoria_ds: record.frecuenciaRespiratoriaDs || 'no_calculado',
+        temperatura: record.vitals.temperature !== undefined ? record.vitals.temperature : null,
+        saturacion_oxigeno: record.vitals.oxygenSaturation !== undefined ? record.vitals.oxygenSaturation : null,
+        glucemia: record.vitals.glucose !== undefined ? record.vitals.glucose : null,
+        tension_arterial_sistolica: record.vitals.systolicBP !== undefined ? record.vitals.systolicBP : null,
+        tension_arterial_diastolica: record.vitals.diastolicBP !== undefined ? record.vitals.diastolicBP : null,
+        avdi: record.vitals.avpu || null
+      }).eq('episodio_id', record.id);
+
+      await supabase.from('tep_triaje_pediatrico').update({
+        apariencia: record.tepStates?.apariencia || 'no_evaluado',
+        respiracion: record.tepStates?.respiracion || 'no_evaluado',
+        circulacion: record.tepStates?.circulacion || 'no_evaluado'
+      }).eq('episodio_id', record.id);
+    }
+
+    return { success: true };
+  } catch (err: any) {
+    console.warn('Excepción guardando corrección:', err);
+    return { success: false, error: err?.message || 'Error al guardar corrección' };
+  }
+}
+
+/**
  * Fetches the latest pediatric triage records with all associated details.
  */
 export async function fetchTriageRecords(): Promise<PatientData[]> {
@@ -226,20 +355,38 @@ export async function fetchTriageRecords(): Promise<PatientData[]> {
   }
 
   try {
-    const { data, error } = await supabase
+    let data: any[] | null = null;
+    const { data: fullData, error: fullError } = await supabase
       .from('episodios_triaje_pediatrico')
       .select(`
         *,
         signos:signos_vitales_triaje_pediatrico(*),
         tep:tep_triaje_pediatrico(*),
         discriminadores:discriminadores_triaje_pediatrico(*),
-        reevaluaciones:reevaluaciones_triaje_pediatrico(*)
+        reevaluaciones:reevaluaciones_triaje_pediatrico(*),
+        correcciones:correcciones_triaje_pediatrico(*)
       `)
       .order('arrival_date', { ascending: false });
 
-    if (error) {
-      console.warn('Error al obtener datos de Supabase:', error.message);
-      throw new Error(error.message || 'Error de red al obtener datos');
+    if (fullError) {
+      const { data: fallbackData, error: fallbackError } = await supabase
+        .from('episodios_triaje_pediatrico')
+        .select(`
+          *,
+          signos:signos_vitales_triaje_pediatrico(*),
+          tep:tep_triaje_pediatrico(*),
+          discriminadores:discriminadores_triaje_pediatrico(*),
+          reevaluaciones:reevaluaciones_triaje_pediatrico(*)
+        `)
+        .order('arrival_date', { ascending: false });
+
+      if (fallbackError) {
+        console.warn('Error al obtener datos de Supabase:', fallbackError.message);
+        throw new Error(fallbackError.message || 'Error de red al obtener datos');
+      }
+      data = fallbackData;
+    } else {
+      data = fullData;
     }
 
     return (data || []).map((row: any) => {
@@ -247,6 +394,7 @@ export async function fetchTriageRecords(): Promise<PatientData[]> {
       const tepRow = row.tep && row.tep[0] ? row.tep[0] : {};
       const discList = row.discriminadores || [];
       const reevList = row.reevaluaciones || [];
+      const corrList = row.correcciones || [];
 
       // Reconstruct original age representation
       const isMonths = row.edad_meses !== null && row.edad_meses < 12;
@@ -348,6 +496,10 @@ export async function fetchTriageRecords(): Promise<PatientData[]> {
         fechaObjetivoEvaluacion: row.fecha_objetivo_evaluacion || undefined,
         motivoNoObtencion: row.motivo_no_obtencion || '',
 
+        // Audit fields
+        creadoPor: row.creado_por || undefined,
+        creadoPorNombre: row.creado_por_nombre || undefined,
+
         reevaluaciones: reevList.map((rv: any) => ({
           id: rv.id,
           episodioId: rv.episodio_id,
@@ -366,6 +518,19 @@ export async function fetchTriageRecords(): Promise<PatientData[]> {
           avpu: rv.avdi || undefined,
           motivoNoObtencion: rv.motivo_no_obtencion || undefined,
           fechaCreacion: rv.fecha_creacion
+        })),
+
+        correcciones: corrList.map((c: any) => ({
+          id: c.id,
+          episodioId: c.episodio_id,
+          nivelPrevio: c.nivel_ctas_previo,
+          nivelNuevo: c.nivel_ctas_nuevo,
+          motivo: c.motivo,
+          datosPrevios: c.datos_previos,
+          datosNuevos: c.datos_nuevos,
+          corregidoPor: c.corregido_por,
+          corregidoPorNombre: c.corregido_por_nombre,
+          fecha: c.fecha_correccion
         }))
       };
     });
