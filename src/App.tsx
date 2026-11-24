@@ -2072,44 +2072,11 @@ DESTINO SUGERIDO: ${triage.destination}
                             <RotateCcw size={13} className="text-rose-600" /> Deshacer / Limpiar signos
                           </button>
                         )}
-                        {currentTriage.level === 'IV' || currentTriage.level === 'V' ? (
-                          <span className="text-xs font-bold bg-emerald-50 text-emerald-800 px-3 py-1.5 rounded-lg border border-emerald-200 shrink-0 self-start sm:self-auto flex items-center gap-1.5 shadow-2xs">
-                            <CheckCircle2 size={14} className="text-emerald-600" />
-                            Nivel {currentTriage.level} · Signos vitales optativos
-                          </span>
-                        ) : (
-                          <span className="text-xs font-semibold bg-slate-100 text-slate-600 px-3 py-1.5 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
-                            Campos con <span className="text-red-500 font-bold">*</span> son obligatorios
-                          </span>
-                        )}
+                        <span className="text-xs font-semibold bg-slate-100 text-slate-700 px-3 py-1.5 rounded-lg border border-slate-200 shrink-0 self-start sm:self-auto">
+                          Solo <span className="font-bold text-slate-900">FC</span> <span className="text-red-500 font-bold">*</span> es obligatoria · Demás signos optativos
+                        </span>
                       </div>
                     </div>
-
-                    {/* Banner Informativo para Niveles IV y V con signos optativos */}
-                    {(currentTriage.level === 'IV' || currentTriage.level === 'V') && (
-                      <div className="p-4 rounded-2xl bg-emerald-50/90 border border-emerald-200 text-emerald-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs shadow-xs">
-                        <div className="flex items-center gap-3">
-                          <div className="p-2 bg-emerald-200 text-emerald-800 rounded-xl shrink-0">
-                            <CheckCircle2 size={18} />
-                          </div>
-                          <div>
-                            <span className="font-bold text-sm block">
-                              Prioridad {currentTriage.priority}: Los signos vitales son completamente optativos.
-                            </span>
-                            <p className="text-xs text-emerald-800 mt-0.5 font-medium leading-relaxed">
-                              Puede continuar directamente a la confirmación sin cargar valores o ingresar únicamente las constantes que considere pertinentes.
-                            </p>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setStep(5)}
-                          className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shrink-0 transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-sm active:scale-95"
-                        >
-                          Continuar sin signos <ChevronRight size={16} />
-                        </button>
-                      </div>
-                    )}
 
                     {/* Banner Informativo de Ayuda Clínica para Signos Anormales (Temp, SpO2, Glucemia) */}
                     {abnormalVitalsList.length > 0 && (

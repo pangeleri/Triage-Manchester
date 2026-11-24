@@ -79,23 +79,11 @@ export const getTepLadosList = (data: Partial<PatientData>) => {
   return list;
 };
 
-export const getVitalsRequirementsByLevel = (levelStr: TriageLevel) => {
-  const levelNum = levelStr === 'I' ? 1 : levelStr === 'II' ? 2 : levelStr === 'III' ? 3 : levelStr === 'IV' ? 4 : 5;
-
-  if ([1, 2, 3].includes(levelNum)) {
-    return {
-      heartRate: true,
-      respiratoryRate: true,
-      systolicBP: true,
-      diastolicBP: true,
-      oxygenSaturation: true,
-      temperature: true,
-      glucose: false,
-    };
-  }
-  // Para niveles IV (Poco urgente) y V (No urgente), todos los signos vitales son optativos
+export const getVitalsRequirementsByLevel = (_levelStr?: TriageLevel) => {
+  // Únicamente la Frecuencia Cardíaca (FC) es obligatoria siempre, sin importar el nivel CTAS.
+  // El resto de los signos vitales son optativos.
   return {
-    heartRate: false,
+    heartRate: true,
     respiratoryRate: false,
     systolicBP: false,
     diastolicBP: false,
