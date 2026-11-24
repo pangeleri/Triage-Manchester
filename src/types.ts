@@ -118,6 +118,10 @@ export interface PatientData {
 
   reevaluaciones?: ReevaluacionData[];
   correcciones?: CorreccionData[];
+  /** true si el triaje quedó guardado solo en este equipo y falta enviarlo a la base */
+  pendienteSync?: boolean;
+  /** último error al intentar enviarlo */
+  errorSync?: string;
 }
 
 export interface CorreccionData {

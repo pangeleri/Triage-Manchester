@@ -27,6 +27,42 @@ export const supabase = (() => {
   }
 })();
 
+/** Traduce los errores habituales de Supabase a un mensaje claro y accionable. */
+export function explicarErrorSupabase(msg: string | undefined, code?: string): string {
+  const m = (msg || '').toLowerCase();
+  if (code === '42P01' || m.includes('does not exist') || m.includes('could not find the table') || m.includes('schema cache'))
+    return 'Faltan las tablas en la base de datos: hay que ejecutar supabase_schema.sql en Supabase (SQL Editor). Detalle: ' + msg;
+  if (code === '42501' || m.includes('row-level security') || m.includes('permission denied'))
+    return 'La base rechazó el registro por permisos: el usuario no tiene rol clínico asignado o las reglas de acceso (RLS) no coinciden con supabase_schema.sql. Detalle: ' + msg;
+  if (code === 'PGRST204' || (m.includes('column') && (m.includes('does not exist') || m.includes('could not find'))))
+    return 'La estructura de la base no coincide con la de la app (falta una columna): hay que actualizar las tablas con los scripts .sql del proyecto. Detalle: ' + msg;
+  if (code === '23514' || m.includes('check constraint'))
+    return 'La base rechazó un valor que no está permitido en sus reglas (restricción CHECK). Detalle: ' + msg;
+  if (m.includes('jwt') || m.includes('expired'))
+    return 'La sesión venció. Cerrá sesión y volvé a ingresar. Detalle: ' + msg;
+  if (m.includes('failed to fetch') || m.includes('network'))
+    return 'Sin conexión con el servidor. El registro quedó guardado en este equipo y se enviará al reconectar.';
+  return msg || 'Error desconocido';
+}
+
+/**
+ * Verifica la conexión contra la tabla REAL donde se guardan los triajes.
+ * (La versión anterior consultaba "triage_records", una tabla de prueba: podía mostrar
+ * "En línea" aunque las tablas de triaje no existieran o no se pudiera escribir en ellas.)
+ */
+export async function verificarConexion(): Promise<{ ok: boolean; error?: string }> {
+  if (!supabase) return { ok: false, error: 'Supabase no está configurado.' };
+  try {
+    const { error } = await supabase
+      .from('episodios_triaje_pediatrico')
+      .select('id', { count: 'exact', head: true });
+    if (error) return { ok: false, error: explicarErrorSupabase(error.message, (error as any).code) };
+    return { ok: true };
+  } catch (e: any) {
+    return { ok: false, error: explicarErrorSupabase(e?.message) };
+  }
+}
+
 /**
  * Saves a pediatric triage record to the 5-table schema in Supabase.
  */
@@ -36,6 +72,13 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
   }
 
   try {
+    // El usuario se toma de la sesión activa: la base exige que creado_por sea quien está conectado.
+    const { data: sess } = await supabase.auth.getSession();
+    const userId = sess.session?.user?.id;
+    if (!userId) {
+      return { success: false, error: 'La sesión venció. Cerrá sesión y volvé a ingresar; el triaje quedó guardado en este equipo y se enviará después.' };
+    }
+
     // 1. Insert into episodios_triaje_pediatrico
     const { error: epError } = await supabase
       .from('episodios_triaje_pediatrico')
@@ -58,13 +101,15 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
           fecha_objetivo_evaluacion: record.fechaObjetivoEvaluacion || null,
           arrival_date: record.arrivalDate,
           motivo_no_obtencion: record.motivoNoObtencion || null,
-          creado_por: record.creadoPor || null
+          creado_por: userId
         }
       ]);
 
     if (epError) {
+      // Reintento de un registro que ya había llegado a la base: no es un error.
+      if ((epError as any).code === '23505') return { success: true };
       console.warn('Error al guardar episodio en Supabase:', epError.message);
-      return { success: false, error: 'Episodio: ' + epError.message };
+      return { success: false, error: explicarErrorSupabase(epError.message, (epError as any).code) };
     }
 
     // 2. Insert into signos_vitales_triaje_pediatrico
@@ -86,7 +131,7 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
           puntaje_dolor: null,
           avdi: record.vitals.avpu || null,
           motivo_no_obtencion: record.motivoNoObtencion || null,
-          creado_por: record.creadoPor || null
+          creado_por: userId
         }
       ]);
 
@@ -94,7 +139,7 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
       console.warn('Error al guardar signos vitales en Supabase:', svError.message);
       // Clean up episodic record on failure
       await supabase.from('episodios_triaje_pediatrico').delete().eq('id', record.id);
-      return { success: false, error: 'Signos Vitales: ' + svError.message };
+      return { success: false, error: 'Signos vitales: ' + explicarErrorSupabase(svError.message, (svError as any).code) };
     }
 
     // 3. Insert into tep_triaje_pediatrico
@@ -112,7 +157,7 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
     if (tepError) {
       console.warn('Error al guardar TEP en Supabase:', tepError.message);
       await supabase.from('episodios_triaje_pediatrico').delete().eq('id', record.id);
-      return { success: false, error: 'TEP: ' + tepError.message };
+      return { success: false, error: 'TEP: ' + explicarErrorSupabase(tepError.message, (tepError as any).code) };
     }
 
     // 4. Insert into discriminadores_triaje_pediatrico for each finding
@@ -126,7 +171,7 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
           etiqueta: finding,
           nivel_ctas_asociado: meta?.nivel || record.nivelCtasFinal,
           estado_validacion: 'validado',
-          registrado_por: record.creadoPor || null,
+          registrado_por: userId,
           vigente: true
         };
       });
@@ -144,7 +189,7 @@ export async function saveTriageRecord(record: PatientData): Promise<{ success: 
     return { success: true };
   } catch (err: any) {
     console.warn('Excepción de Supabase durante inserción:', err);
-    return { success: false, error: err?.message || 'Error desconocido al guardar' };
+    return { success: false, error: explicarErrorSupabase(err?.message || 'Error desconocido al guardar') };
   }
 }
 

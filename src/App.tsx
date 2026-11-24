@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { 
   Activity, 
   AlertCircle, 
@@ -42,7 +42,7 @@ import { format, differenceInMinutes, differenceInHours } from 'date-fns';
 import { es } from 'date-fns/locale';
 import { cn } from './lib/utils';
 import { FINDINGS, TriageLevel, PatientData, VitalSigns, PatientType, PediatricTriangle, CLINICAL_SYSTEMS, ClinicalSystem, ReevaluacionData, EstadoOperativo, CorreccionData, ESTADOS_CORREGIBLES, findFindingMeta, PAED_CTAS_ABBREVIATIONS } from './types';
-import { isSupabaseConfigured, saveTriageRecord, fetchTriageRecords, saveReevaluation, updateOperationalState, saveCorrection, supabase } from './lib/supabase';
+import { isSupabaseConfigured, verificarConexion, saveTriageRecord, fetchTriageRecords, saveReevaluation, updateOperationalState, saveCorrection, supabase } from './lib/supabase';
 import { getVitalsRange, getVitalsDSLabel, getTepLadosAlterados, getTepLadosList, getVitalsRequirementsByLevel, calculateTriage } from './lib/clinicalUtils';
 
 // --- Constants & Helpers ---
@@ -323,6 +323,57 @@ export default function App() {
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
+  const [conexionError, setConexionError] = useState<string | null>(null);
+  const enviandoPendientesRef = useRef(false);
+
+  /** Lee el historial guardado en este equipo. */
+  const leerHistorialLocal = (): PatientData[] => {
+    try { return JSON.parse(localStorage.getItem('triage_history') || '[]'); } catch { return []; }
+  };
+  const guardarHistorialLocal = (h: PatientData[]) => {
+    try { localStorage.setItem('triage_history', JSON.stringify(h)); } catch { /* almacenamiento lleno o bloqueado */ }
+  };
+
+  /**
+   * Combina lo que vino de la base con los triajes que todavía no se pudieron enviar.
+   * Antes, la lista remota reemplazaba a la local y los triajes no enviados desaparecían de la vista.
+   */
+  const aplicarRemotos = (remotos: PatientData[] | null | undefined) => {
+    const locales = leerHistorialLocal();
+    const remotosIds = new Set((remotos || []).map(r => r.id));
+    const pendientes = locales.filter(l => l.pendienteSync && !remotosIds.has(l.id));
+    if ((!remotos || remotos.length === 0) && pendientes.length === 0) return;
+    const combinado = [...pendientes, ...(remotos || [])]
+      .sort((a, b) => new Date(b.arrivalDate).getTime() - new Date(a.arrivalDate).getTime());
+    setHistory(combinado);
+    guardarHistorialLocal(combinado);
+  };
+
+  /** Reintenta enviar a la base los triajes que quedaron solo en este equipo. */
+  const enviarPendientes = async (): Promise<{ enviados: number; fallidos: number }> => {
+    if (!isSupabaseConfigured || enviandoPendientesRef.current) return { enviados: 0, fallidos: 0 };
+    const pendientes = leerHistorialLocal().filter(r => r.pendienteSync);
+    if (pendientes.length === 0) return { enviados: 0, fallidos: 0 };
+    enviandoPendientesRef.current = true;
+    let enviados = 0, fallidos = 0;
+    try {
+      for (const reg of pendientes) {
+        const { pendienteSync, errorSync, ...limpio } = reg;
+        const res = await saveTriageRecord(limpio as PatientData);
+        const actual = leerHistorialLocal();
+        const actualizado = actual.map(r => r.id !== reg.id ? r
+          : res.success ? { ...r, pendienteSync: false, errorSync: undefined }
+          : { ...r, errorSync: res.error });
+        guardarHistorialLocal(actualizado);
+        setHistory(actualizado);
+        if (res.success) enviados++; else fallidos++;
+      }
+    } finally {
+      enviandoPendientesRef.current = false;
+    }
+    return { enviados, fallidos };
+  };
+
   const [supabaseConnected, setSupabaseConnected] = useState(false);
 
   // Helper to count altered sides in TEP
@@ -382,21 +433,14 @@ export default function App() {
       const syncSupabase = async () => {
         setIsSyncing(true);
         try {
-          if (supabase) {
-            const { error: testErr } = await supabase.from('triage_records').select('id').limit(1);
-            if (testErr) {
-              setSupabaseConnected(false);
-              throw new Error(testErr.message || 'Error de conexión');
-            }
-            setSupabaseConnected(true);
-          } else {
-            setSupabaseConnected(false);
-            throw new Error('Supabase no está instanciado.');
-          }
+          const con = await verificarConexion();
+          setSupabaseConnected(con.ok);
+          setConexionError(con.ok ? null : con.error || 'Error de conexión');
+          if (!con.ok) throw new Error(con.error || 'Error de conexión');
+          await enviarPendientes();
           const remoteRecords = await fetchTriageRecords();
+          aplicarRemotos(remoteRecords);
           if (remoteRecords && remoteRecords.length > 0) {
-            setHistory(remoteRecords);
-            localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
             setDbSuccessMessage('Conexión con Supabase establecida. Datos sincronizados.');
             setTimeout(() => setDbSuccessMessage(null), 5000);
           }
@@ -419,12 +463,10 @@ export default function App() {
   useEffect(() => {
     const checkSupabase = async () => {
       if (isSupabaseConfigured && supabase && navigator.onLine) {
-        try {
-          const { error } = await supabase.from('triage_records').select('id').limit(1);
-          setSupabaseConnected(!error);
-        } catch {
-          setSupabaseConnected(false);
-        }
+        const con = await verificarConexion();
+        setSupabaseConnected(con.ok);
+        setConexionError(con.ok ? null : con.error || 'Error de conexión');
+        if (con.ok) enviarPendientes();
       } else {
         setSupabaseConnected(false);
       }
@@ -470,22 +512,16 @@ export default function App() {
     setDbSuccessMessage(null);
     setDbErrorMessage(null);
     try {
-      if (supabase) {
-        const { error: testErr } = await supabase.from('triage_records').select('id').limit(1);
-        if (testErr) {
-          setSupabaseConnected(false);
-          throw new Error(testErr.message || 'Error de conexión');
-        }
-        setSupabaseConnected(true);
-      } else {
-        throw new Error('Supabase no está instanciado.');
-      }
+      const con = await verificarConexion();
+      setSupabaseConnected(con.ok);
+      setConexionError(con.ok ? null : con.error || 'Error de conexión');
+      if (!con.ok) throw new Error(con.error || 'Error de conexión');
+      const pend = await enviarPendientes();
       const remoteRecords = await fetchTriageRecords();
-      if (remoteRecords && remoteRecords.length > 0) {
-        setHistory(remoteRecords);
-        localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
-      }
-      setDbSuccessMessage('Base de datos sincronizada con éxito.');
+      aplicarRemotos(remoteRecords);
+      setDbSuccessMessage(pend.enviados > 0
+        ? `Base de datos sincronizada. Se enviaron ${pend.enviados} triaje(s) pendiente(s).`
+        : 'Base de datos sincronizada con éxito.');
       setTimeout(() => setDbSuccessMessage(null), 4000);
     } catch (e: any) {
       setSupabaseConnected(false);
@@ -856,6 +892,12 @@ export default function App() {
     cancelCorrection();
   };
 
+  const marcarPendiente = (id: string, error: string) => {
+    const act = leerHistorialLocal().map(r => r.id === id ? { ...r, pendienteSync: true, errorSync: error } : r);
+    guardarHistorialLocal(act);
+    setHistory(act);
+  };
+
   const finalizeTriage = async () => {
     if (currentTriage.level !== 'I' && patient.estadoOperativo !== 'preliminar_critico') {
       if (!patient.findings || patient.findings.length === 0) {
@@ -899,7 +941,8 @@ export default function App() {
       estadoOperativo: patient.estadoOperativo || 'en_espera'
     };
 
-    // Save locally immediately
+    // Save locally immediately (queda como pendiente hasta que la base confirme)
+    if (isSupabaseConfigured) finalPatient.pendienteSync = true;
     const updatedHistory = [finalPatient, ...history];
     setHistory(updatedHistory);
     localStorage.setItem('triage_history', JSON.stringify(updatedHistory));
@@ -923,27 +966,25 @@ export default function App() {
         const res = await saveTriageRecord(finalPatient);
         if (res.success) {
           setSupabaseConnected(true);
+          const confirmado = leerHistorialLocal().map(r => r.id === finalPatient.id ? { ...r, pendienteSync: false, errorSync: undefined } : r);
+          guardarHistorialLocal(confirmado);
+          setHistory(confirmado);
           setDbSuccessMessage('Registro guardado en Supabase con éxito.');
           // Refresh list to ensure we have structural sync
           try {
             const remoteRecords = await fetchTriageRecords();
-            if (remoteRecords && remoteRecords.length > 0) {
-              setHistory(remoteRecords);
-              localStorage.setItem('triage_history', JSON.stringify(remoteRecords));
-            }
+            aplicarRemotos(remoteRecords);
           } catch (fetchErr: any) {
             console.warn('No se pudieron recuperar los registros remotos después de guardar:', fetchErr?.message || fetchErr);
           }
           setTimeout(() => setDbSuccessMessage(null), 3000);
         } else {
           setSupabaseConnected(false);
-          setDbErrorMessage('No se pudo guardar en Supabase: ' + res.error);
-          setTimeout(() => setDbErrorMessage(null), 6000);
+          marcarPendiente(finalPatient.id, res.error || 'Error desconocido');
         }
       } catch (err: any) {
         setSupabaseConnected(false);
-        setDbErrorMessage('Excepción de Supabase: ' + (err?.message || err));
-        setTimeout(() => setDbErrorMessage(null), 6000);
+        marcarPendiente(finalPatient.id, String(err?.message || err));
       } finally {
         setDbSaving(false);
       }
@@ -2863,6 +2904,26 @@ DESTINO SUGERIDO: ${triage.destination}
               </div>
             </div>
 
+            {isSupabaseConfigured && (conexionError || history.some(h => h.pendienteSync)) && (
+              <div role="alert" className="mt-3 rounded-xl border border-amber-300 bg-amber-50 p-3 text-amber-950 space-y-1.5">
+                {history.some(h => h.pendienteSync) && (
+                  <p className="text-xs font-bold">
+                    {history.filter(h => h.pendienteSync).length} triaje(s) guardado(s) solo en este equipo, sin enviar a la base de datos.
+                  </p>
+                )}
+                <p className="text-[11px] leading-snug">
+                  {conexionError || history.find(h => h.pendienteSync && h.errorSync)?.errorSync || 'Pendiente de envío.'}
+                </p>
+                <button
+                  onClick={triggerManualSync}
+                  disabled={isSyncing}
+                  className="mt-1 inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-[11px] font-bold text-white hover:bg-amber-700 disabled:opacity-60 cursor-pointer"
+                >
+                  <RefreshCw size={12} className={cn(isSyncing && "animate-spin")} /> Reintentar envío
+                </button>
+              </div>
+            )}
+
             <div className="mt-3 max-h-[520px] xl:max-h-[560px] overflow-y-auto pr-1 flex flex-col gap-2">
               {history.length === 0 ? (
                 <div className="text-center py-10 text-slate-400">
@@ -2901,6 +2962,14 @@ DESTINO SUGERIDO: ${triage.destination}
                             )}>
                               NIVEL {p.triageLevel}
                             </span>
+                            {p.pendienteSync && (
+                              <span
+                                className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300 uppercase tracking-wide"
+                                title={p.errorSync || 'Pendiente de envío a la base de datos'}
+                              >
+                                Sin enviar
+                              </span>
+                            )}
                             {(p.correcciones?.length ?? 0) > 0 && (
                               <span
                                 className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-800 border border-violet-200 uppercase tracking-wide"
